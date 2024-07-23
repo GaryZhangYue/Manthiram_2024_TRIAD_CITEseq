@@ -1,0 +1,847 @@
+---
+title: "Functional score, Cell cluster frequency plots"
+date: "`r Sys.Date()`"
+author: Yue (Gary) Zhang, PhD
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = T, message = FALSE) 
+```
+
+# Preparation
+
+## Load packages and set variables
+
+```{r Initiate, results='hide'}
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+  "dplyr",
+  "Seurat",
+  "patchwork",
+  "ggplot2",
+  "ggrepel",
+  "readxl",
+  "future",
+  "cowplot",
+  "Azimuth",
+  "dsb",
+  "corrplot",
+  "DT",
+  "tidyr",
+  "ggpubr",
+  "scRNAtoolVis",
+  "purrr",
+  "limma",
+  "wesanderson",
+  "reshape",
+  "edgeR",
+  'ggfun',
+  'ggrepel',
+  'fgsea',
+  'circlize',
+  'ComplexHeatmap',
+  'vegan',
+  "immunarch"
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+  lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# Immcantation required packages
+suppressPackageStartupMessages(library(airr))
+suppressPackageStartupMessages(library(alakazam))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(dowser))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(scoper))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(shazam))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+## Customized functions
+
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster,sex=F){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  if(sex == T){
+    freq$sex = cov$sex[match(freq$orig.ident,cov$sample)]
+    freq$group_sex = paste0(freq$group,'_',freq$sex)
+    freq$group_sex = factor(freq$group_sex, levels = c('control_F','trisomy8_F','control_M','trisomy8_M'))
+  }
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+  # remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+  df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+  # calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+  df$p_val_adj_log10 = -log10(df$p_val_adj)
+  df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+  # generate summary statistics to show on caption
+  minFDR <- -log10(maxq)
+  sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+  sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+  
+  cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+  cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+  if(showsub) {
+    subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                       " (FDR<", maxq, ", log2FC>", minLFC, ")")
+  } else {
+    subtitle <- NULL
+  }
+  
+  p1 = ggplot(df) +
+    geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+    geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+    geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+    facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+    theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+    geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+    geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+    geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+  
+  df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+  df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+  df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+  p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+    geom_point() +
+    facet_wrap(~ Celltype_tested, scales = 'free') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    coord_flip() +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+  return(list(p1,p2))
+}
+
+create_dt <- function(df,caption){
+  datatable(df,
+            caption = caption,
+            extensions = 'Buttons',
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All")),
+                           initComplete = JS(
+    "function(settings, json) {",
+    "$('caption').css({'font-size': '20px', 'font-family': 'Arial', 'font-weight': 'bold'});",
+    "}")))
+}
+
+# function to set a column as rownames and remove that column from the df; default is setting the first column as the rowname
+setrowname =  function(df,col = 1){
+  if (is.numeric(col)) {
+    # print('it is a number')
+    rownames(df) = df[,col]
+    df = df[,-col]
+  } else {
+    # print('it is a string')
+    rownames(df) = df[,which(names(df) %in% c(col))]
+    df = df[,-which(names(df) %in% c(col))]
+  }
+  return(df)
+} 
+
+# function to get colors from a palatte
+getcol = function(group,pal = "Darjeeling1",shift_col_palatte=0){
+  groupcol = as.numeric(factor(group))
+  groupcol = wes_palette(pal)[groupcol+shift_col_palatte]
+  return(groupcol)
+}
+
+
+# Volcano plot
+plot_de_volcano_scatter3 = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Volcano plot',
+                                    axislim,leftarrowlim,rightarrowlim) {
+  # calculate log10 q value. 
+  df$qval_log10 = -log10(df$`adj.P.Val`)
+  # generate summary statistics to show on caption
+  minFDR <- -log10(maxq)
+  sigs <- df$qval_log10 >= minFDR & abs(df$logFC) >= minLFC
+  sigLowFC <- df$qval_log10 >= minFDR & abs(df$logFC) < minLFC
+  
+  cnt_plus <- sum(df$qval_log10 >= minFDR & df$logFC >= minLFC)
+  cnt_neg <- sum(df$qval_log10 >= minFDR & df$logFC <= -minLFC)
+  if(showsub) {
+    subtitle <- paste0(sum(sigs), " DEGs: ", cnt_plus, " + and ", cnt_neg, " -",
+                       " (q<", maxq, ", log2FC>", minLFC, ")")
+  } else {
+    subtitle <- NULL
+  }
+  
+  p1 = ggplot(df) +
+    geom_point(aes(x=logFC, y=qval_log10, color = logFC, size = qval_log10)) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(desc(logFC)) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(desc(logFC)) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "left"
+    ) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(logFC) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(logFC) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "right"
+    ) + 
+    scale_color_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                          values = seq(0, 1, 0.2)) +
+    scale_fill_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                         values = seq(0, 1, 0.2)) +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 FC") + ylab("-log10 q value") +
+    labs(color = 'log2 FC', size = '-log10 q') +
+    theme(panel.grid = element_blank(),
+          legend.background = element_roundrect(color = "#808080", linetype = 1),
+          axis.text = element_text(size = 13, color = "#000000"),
+          axis.title = element_text(size = 15),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5)) + 
+    geom_vline(xintercept=minLFC, linetype=2) + 
+    geom_vline(xintercept=-minLFC, linetype=2) + 
+    geom_hline(yintercept=minFDR, linetype=4) +
+    coord_cartesian(clip = "off") + 
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "first"),
+        gp = grid::gpar(lwd = 3, col = "#74add1")
+      ), 
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Down",
+        gp = grid::gpar(col = "#74add1")
+      ),
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "last"),
+        gp = grid::gpar(lwd = 3, col = "#d73027")
+      ), 
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Up",
+        gp = grid::gpar(col = "#d73027")
+      ),
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) 
+  if (length(axislim) == 4) {
+    p1 = p1 + xlim(axislim[1], axislim[2]) + ylim(axislim[3], axislim[4])
+  }
+  return(p1)
+}
+
+# calculate functional scores
+get_functional_scores = function(so,
+                                 GEXmatrix,
+                                 fl = NULL,
+                                 module=NULL){
+  # select genes corresponding to the query module
+  category = fl[[module]]
+  # extract normalized gene expression data
+  data = GEXmatrix
+  # find existed markers under the query module
+  category.shared = intersect(category,rownames(data))
+  # find markers not existed in the dataset under the module
+  category.missing = setdiff(category,rownames(data))
+  # extract normalized expression of genes of interest
+  df <-
+    data %>%
+    t() %>%
+    as.data.frame() %>%
+    select(category.shared)
+  # get averages for genes of interest
+  df$avg_genes = rowMeans(df)
+  if (all(rownames(so@meta.data) == rownames(df))){
+    so@meta.data[[paste0('functional_score_of_',module)]] = df$avg_genes
+    return(list(so,category.shared,category.missing,length(category.shared)/length(category)))
+  } else {
+    return('cell barcodes do not match')
+  }
+}
+
+```
+
+## Load seurat object
+
+
+```{r load pbmc, eval=T}
+pbmc = readRDS('srt.obj.merged.clusterCuratedRefined.classifiedSet.myeloidInfoAdded.metadataIdentifierAdded.FuncSAdded.RDS')
+pbmc.copy1 <- pbmc
+#pbmc.copy1 -> pbmc
+pbmc.metadata = pbmc@meta.data
+pbmc.mld2 = readRDS('pbmc.mld2.SexAgeAdded.FuncSAdded.RDS')
+pbmc.mld2.copy1 <- pbmc.mld2
+#pbmc.mld2.copy1 -> pbmc.mld2
+```
+
+
+# UMAP
+
+
+## Full UMAP (all cells; no subsampling)
+
+
+```{r umap colors}
+# Define a custom color palette
+# Replace these colors with the colors you want for each cluster
+custom_colors_fullUmap <- c(
+  "CD14 Mono"     = "#E41A1C",  # Red
+  "CD16 Mono"     = "#377EB8",  # Blue
+  "cDC"           = "#4DAF4A",  # Green
+  "pDC"           = "#984EA3",  # Purple
+  "B Naive"       = "#FF7F00",  # Orange
+  "B memory"      = "#FFFF33",  # Yellow
+  "Plasmablast B" = "#A65628",  # Brown
+  "CD4 T Naive"   = "#F781BF",  # Pink
+  "CD4 T Memory"  = "#999999",  # Grey
+  "CD8 T Naive"   = "#A6CEE3",  # Light blue
+  "CD8 T Memory"  = "#B2DF8A",  # Light green
+  "MAIT"          = "#FB9A99",  # Light red
+  "NK"            = "#CAB2D6",  # Light purple
+  "gdT"           = "#FFD92F"   # Light yellow
+)
+
+custom_colors_mld <- c(
+  "0" = "#33A02C",  # Dark green
+  "1" = "#6A3D9A",  # Dark purple
+  "2" = "#FF6600",  # Bright orange
+  "3" = "#1F78B4",  # Dark blue
+  "4" = "#B15928",  # Rust
+  "5" = "#E31A1C",  # Bright red
+  "6" = "#FFCC00",  # Bright yellow
+  "7" = "#B2DF8A"   # Pale green
+)
+
+```
+
+```{r umap full umap no subsampling,fig.width=6,fig.height=6}
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = 'group', label = F, label.size = 5, repel = T)
+DimPlot(subset(pbmc, group == 'trisomy8' & trisomy %in% c('NORMAL','TRISOMY')),reduction = 'wnn.umap', group.by = 'trisomy', label = F, label.size = 5, repel = T) + ggtitle('Trisomy vs Disomy cells in Trisomy 8 patients')
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = 'curated_clusters4', label = T, label.size = 3, repel = T,
+        cols = custom_colors_fullUmap)
+```
+
+## Full UMAP (with subsampling to match cell numbers between Trisomy 8 and HC)
+
+```{r full umap with subsampling}
+pbmc.subsampled = pbmc
+Idents(pbmc.subsampled) <- "group"
+table(pbmc.subsampled@meta.data$group)
+cat("subsample each group to 26937 cells")
+pbmc.subsampled <- subset(pbmc.subsampled, downsample = 26937)
+table(pbmc.subsampled@meta.data$group)
+DimPlot(pbmc.subsampled, reduction = 'wnn.umap', group.by = 'group', label = F, label.size = 5, repel = T)
+DimPlot(subset(pbmc.subsampled, group == 'trisomy8' & trisomy %in% c('NORMAL','TRISOMY')),reduction = 'wnn.umap', group.by = 'trisomy', label = F, label.size = 5, repel = T) + ggtitle('Trisomy vs Disomy cells in Trisomy 8 patients')
+DimPlot(pbmc.subsampled, reduction = 'wnn.umap', group.by = 'curated_clusters4', label = T, label.size = 3, repel = T,
+        cols = custom_colors_fullUmap)
+```
+```{r full umap with subsampling and split,fig.width=10,fig.height=6}
+DimPlot(pbmc.subsampled, reduction = 'wnn.umap', group.by = 'curated_clusters4', split.by = 'group',label = T, label.size = 3, repel = T,cols = custom_colors_fullUmap)
+```
+
+## Myeloid cells (without subsampling)
+
+```{r umap mld umap no subsampling,fig.width=9,fig.height=6}
+DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", group.by = 'group', label = F, label.size = 5, repel = T)
+DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", group.by = 'myeloid_Clusters', label = T, label.size = 3, repel = T, cols = custom_colors_mld)
+DimPlot(pbmc.mld2, reduction = 'wnn.umap.myeloid', group.by = 'myeloid_Clusters', split.by = 'group', label = F, repel = T, cols = custom_colors_mld)
+```
+
+
+## Myeloid cells(with subsampling to match cell numbers between Trisomy 8 and HC)
+
+```{r mld umap with subsampling}
+pbmc.mld2.subsampled = pbmc.mld2
+Idents(pbmc.mld2.subsampled) <- "group"
+table(pbmc.mld2.subsampled@meta.data$group)
+cat("subsample each group to 4775 cells")
+pbmc.mld2.subsampled <- subset(pbmc.mld2.subsampled, downsample = 4775)
+table(pbmc.mld2.subsampled@meta.data$group)
+DimPlot(pbmc.mld2.subsampled, reduction = 'wnn.umap.myeloid', group.by = 'group', label = F, label.size = 5, repel = T)
+DimPlot(pbmc.mld2.subsampled, reduction = 'wnn.umap.myeloid', group.by = 'myeloid_Clusters', label = F, repel = T, cols = custom_colors_mld)
+DimPlot(pbmc.mld2.subsampled, reduction = 'wnn.umap.myeloid', group.by = 'myeloid_Clusters', split.by = 'group', label = F, repel = T, cols = custom_colors_mld)
+```
+
+
+# Cluster Frequency
+
+Bar plot with the average frequency of each cluster in TRIAD (one bar) and control (one bar) for the full PBMC clustering and myeloid clustering
+
+## All cells, by subject
+
+```{r freq cal}
+cluster.freq = cluster_freq(pbmc,"orig.ident",cluster = 'curated_clusters4')
+```
+
+```{r freq table}
+create_dt(cluster.freq, caption = "Cluster frequency for all subjects (using curated_clusters4)")
+```
+
+```{r freq plot,fig.width=6,fig.height=6}
+ggplot(data = cluster.freq, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = curated_clusters4)) +
+  geom_bar(stat="identity",color = 'black') +
+  scale_fill_manual(values = custom_colors_fullUmap) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab(" ") + ylab('Cluster frequency') +
+  guides(fill=guide_legend(nrow=4))
+```
+
+## All cells, by group
+
+```{r freq by group}
+cluster.freq_byGroup <-
+  pbmc@meta.data %>%
+  group_by(group, curated_clusters4) %>%
+  summarise(count=n()) %>%
+  mutate(relative_frequency = count/sum(count))
+
+create_dt(cluster.freq_byGroup, caption = "Cluster frequency by groups (using curated_clusters4)")
+```
+
+```{r freq plot by group,fig.width=6,fig.height=6}
+ggplot(data = cluster.freq_byGroup, mapping = aes(x = group, y = `relative_frequency`,fill = curated_clusters4)) +
+  geom_bar(stat="identity",color = 'black') +
+  scale_fill_manual(values = custom_colors_fullUmap) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab(" ") + ylab('Cluster frequency') +
+  guides(fill=guide_legend(nrow=4))
+
+```
+
+## Myeloid cells, by subject 
+
+myeloid cells only, based on myeloid_Clusters column.
+
+```{r m freq}
+cluster.freq.myeloids = cluster_freq(pbmc.mld2,'orig.ident','myeloid_Clusters')
+```
+
+```{r myl freq table}
+create_dt(cluster.freq.myeloids, caption = "Myeloid cell cluster frequency by subjects (using myeloid_Clusters column)")
+```
+
+```{r myl fre plot,fig.width=6,fig.height=6}
+ggplot(data = cluster.freq.myeloids, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = myeloid_Clusters)) +
+  geom_bar(stat="identity",color = 'black') +
+  scale_fill_manual(values = custom_colors_mld) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Cluster frequency') +
+  guides(fill=guide_legend(nrow=2))
+```
+
+
+## Myeloid cells, by group
+
+```{r freq by group mld}
+cluster.freq.myeloids_byGroup <-
+  pbmc.mld2@meta.data %>%
+  group_by(group, myeloid_Clusters) %>%
+  summarise(count=n()) %>%
+  mutate(relative_frequency = count/sum(count))
+
+create_dt(cluster.freq.myeloids_byGroup, caption = "Myeloids cells subclusters frequency by groups (using myeloid_Clusters)")
+```
+
+
+```{r freq plot by group mld,fig.width=5,fig.height=6}
+ggplot(data = cluster.freq.myeloids_byGroup, mapping = aes(x = group, y = `relative_frequency`,fill = myeloid_Clusters)) +
+  geom_bar(stat="identity",color = 'black') +
+  scale_fill_manual(values = custom_colors_mld) +
+  theme_classic() +
+  theme(legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab(" ") + ylab('Cluster frequency') +  guides(fill=guide_legend(nrow=2,title = 'Myeloid cells subclusters'))
+
+```
+
+# Key genes and ADT markers for cell cluster annotation
+
+## Genes
+
+** Selected genes **
+
+"CD14", # CD14 Monocytes
+
+"CDKN1C", # CD16 Monocytes
+
+"FCER1A", # cDC
+
+"SERPINF1", # pDC
+
+"CD79A", "CD79B", # B
+
+"MZB1", # Plasmablast B
+
+'CD4','IL7R', 'MAL', # CD4T
+
+"CCR7","CD27", # CD4T Naive/Memory
+
+"CD8B", "CD8A", # CD8T
+
+"NKG7", "KLRD1", "TYROBP", #NK
+
+"NCR3","GZMK", # MAIT
+
+"TRDC","TRDV2" # dgT
+
+  
+  
+```{r key genes,fig.width=10,fig.height=6}
+keyGenes = c(
+  "CD14", # CD14 Monocytes
+  "CDKN1C", # CD16 Monocytes
+  "FCER1A", # cDC
+  "SERPINF1", # pDC
+  "CD79A", "CD79B", # B
+  "MZB1", # Plasmablast B
+  'CD4','IL7R', 'MAL', # CD4T
+  "CCR7","CD27", # CD4T Naive/Memory
+  "CD8B", "CD8A", # CD8T
+  "NKG7", "KLRD1", "TYROBP", #NK
+  "NCR3","GZMK", # MAIT
+  "TRDC","TRDV2" # dgT
+  )
+cluster_order = c("CD14 Mono",
+                  "CD16 Mono",
+                  'cDC',
+                  'pDC',
+                  "B Naive",
+                  "B memory",
+                  "Plasmablast B",
+                  "CD4 T Naive",
+                  "CD4 T Memory",
+                  "CD8 T Naive",
+                  "CD8 T Memory",
+                  'MAIT',
+                  "NK",
+                  'gdT'
+                  )
+jjDotPlot(object = pbmc,
+          gene = keyGenes,
+          gene.order = keyGenes,
+          cluster.order = rev(cluster_order),
+          id = 'curated_clusters4',ytree = F)
+
+```
+
+## ADTs
+
+** Selected ADT markers **
+
+"CD14", # CD14 Monocytes
+
+"CD16", # CD16 Monocytes
+
+"CD19","IgM", # B
+
+"CD27","IgD", # B Naive/Memory
+
+'CD4', #CD4T
+
+"CD45RA",  # CD4T Naive/Memory
+
+'CD8', #CD8T
+
+"CD3" # NK
+  
+```{r key ADTs,fig.width=10,fig.height=6}
+keyADTs = c(
+  "CD14", # CD14 Monocytes
+  "CD16", # CD16 Monocytes
+  "CD19","IgM", # B
+  "CD27","IgD", # B Naive/Memory
+  'CD4', #CD4T
+  "CD45RA",  # CD4T Naive/Memory
+  'CD8', #CD8T
+  "CD3" # NK
+)
+
+jjDotPlot(object = pbmc,assay = 'ADT',
+          gene = keyADTs,
+          id = 'curated_clusters4',
+          gene.order = keyADTs,
+          cluster.order = rev(cluster_order),
+          dot.col = c('white','blue'),
+          ytree = F)
+
+```
+
+# Functional scores for the selected pathways
+
+```{r fs pw selection}
+# (this step takes a long time, so do it once for all following iterations)
+geneSet.kegg = gmtPathways('c2.cp.kegg_medicus.v2023.2.Hs.symbols.gmt')
+geneSet.reactome =gmtPathways('c2.cp.reactome.v2023.2.Hs.symbols.gmt') 
+geneSet.go = gmtPathways('c5.go.bp.v2023.2.Hs.symbols.gmt')
+geneSet.hallmark = gmtPathways('h.all.v2023.2.Hs.symbols.gmt')
+geneSet.merged4 = c(geneSet.kegg,geneSet.reactome,geneSet.go,geneSet.hallmark)
+
+pw = c('HALLMARK_INTERFERON_GAMMA_RESPONSE',
+'HALLMARK_Interferon alpha response',
+'GOBP_Response to type II INTERFERON',
+'GOBP_Response to type I INTERFERON',
+'HALLMARK_TNFA signaling via NFKB',
+'HALLMARK_IL6_JAK_STAT3_Signaling',
+'HALLMARK_Apoptosis',
+"GOBP_RESPONSE_TO_TUMOR_NECROSIS_FACTOR",
+'GOBP_Monocyte chemotaxis',
+'REACTOME_Translation',
+  "GOBP_RESPONSE_TO_INTERLEUKIN_1",
+  "GOBP_POSITIVE_REGULATION_OF_INTERLEUKIN_1_BETA_PRODUCTION",
+  "GOBP_INTERLEUKIN_1_MEDIATED_SIGNALING_PATHWAY",
+  "GOBP_INTERLEUKIN_1_PRODUCTION",
+  "GOBP_CELLULAR_RESPONSE_TO_INTERLEUKIN_1",
+  "REACTOME_INTERLEUKIN_1_SIGNALING"
+)
+
+# Capitalize all letters and replace spaces with underscores
+pw <- toupper(gsub(" ", "_", pw))
+# check if everything matched
+# setdiff(pw,names(geneSet.merged4))
+```
+
+## Myeloid subset
+
+```{r fs plot prep mld}
+
+fs.raw = pbmc.mld2@meta.data
+cat(paste0('number of cells in functional score calculation: ',nrow(fs.raw)))
+fs.genes = readRDS('functional_score_genes_summary.mld2.session30.rds')
+
+fs.raw = fs.raw %>%
+  select(c(group,orig.ident,paste0('functional_score_of_',pw)))
+names(fs.raw) = gsub('functional_score_of_','',names(fs.raw))
+
+# Calculate the averages for each group and orig.ident
+# by group
+fs.group.avg <- fs.raw %>%
+  group_by(group) %>%
+  summarise(
+    HALLMARK_INTERFERON_GAMMA_RESPONSE = mean(HALLMARK_INTERFERON_GAMMA_RESPONSE, na.rm = TRUE),
+    HALLMARK_INTERFERON_ALPHA_RESPONSE = mean(HALLMARK_INTERFERON_ALPHA_RESPONSE, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TYPE_II_INTERFERON = mean(GOBP_RESPONSE_TO_TYPE_II_INTERFERON, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TYPE_I_INTERFERON = mean(GOBP_RESPONSE_TO_TYPE_I_INTERFERON, na.rm = TRUE),
+    HALLMARK_TNFA_SIGNALING_VIA_NFKB = mean(HALLMARK_TNFA_SIGNALING_VIA_NFKB, na.rm = TRUE),
+    HALLMARK_IL6_JAK_STAT3_SIGNALING = mean(HALLMARK_IL6_JAK_STAT3_SIGNALING, na.rm = TRUE),
+    HALLMARK_APOPTOSIS = mean(HALLMARK_APOPTOSIS, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TUMOR_NECROSIS_FACTOR = mean(GOBP_RESPONSE_TO_TUMOR_NECROSIS_FACTOR, na.rm = TRUE),
+    GOBP_MONOCYTE_CHEMOTAXIS = mean(GOBP_MONOCYTE_CHEMOTAXIS, na.rm = TRUE),
+    REACTOME_TRANSLATION = mean(REACTOME_TRANSLATION, na.rm = TRUE),
+    GOBP_RESPONSE_TO_INTERLEUKIN_1 = mean(GOBP_RESPONSE_TO_INTERLEUKIN_1, na.rm = TRUE),
+    GOBP_POSITIVE_REGULATION_OF_INTERLEUKIN_1_BETA_PRODUCTION = mean(GOBP_POSITIVE_REGULATION_OF_INTERLEUKIN_1_BETA_PRODUCTION, na.rm = TRUE),
+    GOBP_INTERLEUKIN_1_MEDIATED_SIGNALING_PATHWAY = mean(GOBP_INTERLEUKIN_1_MEDIATED_SIGNALING_PATHWAY, na.rm = TRUE),
+    GOBP_INTERLEUKIN_1_PRODUCTION = mean(GOBP_INTERLEUKIN_1_PRODUCTION, na.rm = TRUE),
+    GOBP_CELLULAR_RESPONSE_TO_INTERLEUKIN_1 = mean(GOBP_CELLULAR_RESPONSE_TO_INTERLEUKIN_1, na.rm = TRUE),
+    REACTOME_INTERLEUKIN_1_SIGNALING = mean(REACTOME_INTERLEUKIN_1_SIGNALING, na.rm = TRUE)
+  ) 
+# by subject
+fs.sample.avg <- fs.raw %>%
+  group_by(orig.ident) %>%
+  summarise(
+    HALLMARK_INTERFERON_GAMMA_RESPONSE = mean(HALLMARK_INTERFERON_GAMMA_RESPONSE, na.rm = TRUE),
+    HALLMARK_INTERFERON_ALPHA_RESPONSE = mean(HALLMARK_INTERFERON_ALPHA_RESPONSE, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TYPE_II_INTERFERON = mean(GOBP_RESPONSE_TO_TYPE_II_INTERFERON, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TYPE_I_INTERFERON = mean(GOBP_RESPONSE_TO_TYPE_I_INTERFERON, na.rm = TRUE),
+    HALLMARK_TNFA_SIGNALING_VIA_NFKB = mean(HALLMARK_TNFA_SIGNALING_VIA_NFKB, na.rm = TRUE),
+    HALLMARK_IL6_JAK_STAT3_SIGNALING = mean(HALLMARK_IL6_JAK_STAT3_SIGNALING, na.rm = TRUE),
+    HALLMARK_APOPTOSIS = mean(HALLMARK_APOPTOSIS, na.rm = TRUE),
+    GOBP_RESPONSE_TO_TUMOR_NECROSIS_FACTOR = mean(GOBP_RESPONSE_TO_TUMOR_NECROSIS_FACTOR, na.rm = TRUE),
+    GOBP_MONOCYTE_CHEMOTAXIS = mean(GOBP_MONOCYTE_CHEMOTAXIS, na.rm = TRUE),
+    REACTOME_TRANSLATION = mean(REACTOME_TRANSLATION, na.rm = TRUE),
+    GOBP_RESPONSE_TO_INTERLEUKIN_1 = mean(GOBP_RESPONSE_TO_INTERLEUKIN_1, na.rm = TRUE),
+    GOBP_POSITIVE_REGULATION_OF_INTERLEUKIN_1_BETA_PRODUCTION = mean(GOBP_POSITIVE_REGULATION_OF_INTERLEUKIN_1_BETA_PRODUCTION, na.rm = TRUE),
+    GOBP_INTERLEUKIN_1_MEDIATED_SIGNALING_PATHWAY = mean(GOBP_INTERLEUKIN_1_MEDIATED_SIGNALING_PATHWAY, na.rm = TRUE),
+    GOBP_INTERLEUKIN_1_PRODUCTION = mean(GOBP_INTERLEUKIN_1_PRODUCTION, na.rm = TRUE),
+    GOBP_CELLULAR_RESPONSE_TO_INTERLEUKIN_1 = mean(GOBP_CELLULAR_RESPONSE_TO_INTERLEUKIN_1, na.rm = TRUE),
+    REACTOME_INTERLEUKIN_1_SIGNALING = mean(REACTOME_INTERLEUKIN_1_SIGNALING, na.rm = TRUE)
+  ) 
+```
+
+### Functional scores and gene recruitment rate
+
+```{r fs show tables mld}
+create_dt(fs.genes,'Module score gene recruitment rates')
+create_dt(fs.sample.avg,'Module scores averages by sample')
+create_dt(fs.group.avg,'Module scores averages by group')
+```
+
+
+
+### Heatmaps
+
+The functional scores were standardized (scale x to zero mean and unit variance) by row (by function) before plotting.
+
+
+```{r fs heatmap mld,fig.width=15,fig.height=6}
+fs.sample.avg.scaled <- fs.sample.avg %>%
+  as.data.frame() %>%
+  setrowname() %>%
+  t() %>%
+  as.data.frame() %>%
+  decostand(.,MARGIN = 1,method = 'standardize')
+  
+min(fs.sample.avg.scaled)
+max(fs.sample.avg.scaled)
+col_fun = colorRamp2(c(-1.5, 0, 2.5), c("#2B5C8AFF", "#FFF6EDFF", "#AC4522FF"))
+
+fs.sample.avg.scaled.control = as.matrix(select(fs.sample.avg.scaled, c('FYJ', 'SRN', 'VR')))
+fs.sample.avg.scaled.t8 = as.matrix(select(fs.sample.avg.scaled, -c('FYJ', 'SRN', 'VR')))
+
+fs.sample.avg.scaled.control.plt = Heatmap(fs.sample.avg.scaled.control, name = 'Scaled module score',
+                                    column_title = "Control",
+                                    show_row_names = T,show_row_dend = F,
+                                    show_column_names = T, show_column_dend = F,
+                                    cluster_columns = F,cluster_rows = F,
+                                    col = col_fun,
+                                    border_gp = gpar(col = "black", lty = 1),
+                                    row_names_side = "left",
+                                    row_names_max_width = unit(20, "cm"))
+fs.sample.avg.scaled.t8.plt = Heatmap(fs.sample.avg.scaled.t8, name = 'Scaled module score',
+                               column_title = "Trisomy 8",
+                               show_row_names = T,show_row_dend = F,
+                               show_column_names = T, show_column_dend = F,
+                               cluster_columns = F,cluster_rows = F,
+                               col = col_fun,
+                               border_gp = gpar(col = "black", lty = 1),
+                              row_names_side = "left",
+                               row_names_max_width = unit(20, "cm"))
+fs.plt = fs.sample.avg.scaled.control.plt +  fs.sample.avg.scaled.t8.plt
+draw(fs.plt,merge_legend = TRUE, heatmap_legend_side = "right" )
+
+# pdf('session30.functionalScore.heatmap.pdf', width =10, height = 5)
+# par(mar = c(5,5,5,5) + 0.1)
+# draw(fs.plt,merge_legend = TRUE, heatmap_legend_side = "right" )
+# dev.off()
+
+create_dt(fs.sample.avg.scaled,'Module score (scaled by row)')
+```
+
+
+### Feature plot (all samples in one UMAP)
+
+```{r fs feature mld plots all in one,results='asis',fig.width=4,fig.height=4}
+for (pathway in pw){
+  cat('\n')
+  cat('####', pathway, '\n')
+  cat('\n')
+  print(FeaturePlot(pbmc.mld2, features = paste0('functional_score_of_',pathway),reduction = 'wnn.umap.myeloid')& theme(plot.title = element_text(size = 5, face = "bold")))
+  cat('\n')
+}
+```

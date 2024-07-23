@@ -1,0 +1,296 @@
+---
+title: "Myeloid cell reclustering"
+author: "Yue (Gary) Zhang"
+date: "2023-10-11"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{css, echo=FALSE}
+pre {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+pre[class] {
+  max-height: 300px;
+}
+```
+
+# Re-cluster the myeloid cells: cDC, CD16 mono, CD14 mono, pDC
+
+
+## Preparation {.tabset}
+
+### Load packages
+
+```{r Initiate, echo=FALSE}
+## initiate ---------------------------------------------------------
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+    "dplyr",
+    "Seurat",
+    "patchwork",
+    "ggplot2",
+    "ggrepel",
+    "readxl",
+    "future",
+    "cowplot",
+    "Azimuth",
+    "dsb",
+    "corrplot",
+    "DT",
+    "tidyr",
+    "ggpubr"
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+    lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+### Customized functions
+Functions cluster_freq and plot_de_volcano_scatter were created.
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+# remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+# calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+df$p_val_adj_log10 = -log10(df$p_val_adj)
+df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+# generate summary statistics to show on caption
+minFDR <- -log10(maxq)
+sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+
+cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+if(showsub) {
+  subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                     " (FDR<", maxq, ", log2FC>", minLFC, ")")
+} else {
+  subtitle <- NULL
+}
+
+p1 = ggplot(df) +
+  geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+  geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+  geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+  facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+
+df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+  geom_point() +
+  facet_wrap(~ Celltype_tested, scales = 'free') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+return(list(p1,p2))
+}
+```
+
+### Load seurat object
+load srt.obj.merged.clusterCurated.RDS
+```{r load pbmc}
+pbmc = readRDS('srt.obj.merged.clusterCuratedRefined.classifiedSet.RDS')
+pbmc.copy1 <- pbmc
+#pbmc.copy1 -> pbmc
+
+```
+
+
+### Create a subset of myeloid cells
+
+```{r myeloid subset}
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+pbmc.mld = subset(pbmc,curated_clusters3 %in% c('cDC','pDC','CD16 Mono', 'CD14 Mono'))
+pbmc.mld@meta.data$orig.ident = factor(pbmc.mld@meta.data$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+DimPlot(pbmc.mld, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+pbmc.mld.copy <- pbmc.mld
+#pbmc.mld.copy -> pbmc.mld
+
+```
+
+
+## Reclustering the myeloid cells
+
+### Standard preprocessing steps for RNA assay
+
+```{r rna prep}
+pbmc.mld.copy -> pbmc.mld2
+
+## RNA assay standard preprocessing steps
+pbmc.mld2 <- NormalizeData(pbmc.mld2, normalization.method = "LogNormalize", scale.factor = 10000)
+pbmc.mld2 <- FindVariableFeatures(pbmc.mld2, selection.method = "vst", nfeatures = 2000) # find features (genes) expressed most variably between cells
+all.genes <- rownames(pbmc.mld2)
+pbmc.mld2 <- ScaleData(pbmc.mld2, features = all.genes)
+pbmc.mld2 <- RunPCA(pbmc.mld2, features = VariableFeatures(object = pbmc.mld2),reduction.name = 'pca_myeloid',reduction.key = 'pcaMyeloid_')
+ElbowPlot(pbmc.mld2,reduction = 'pca_myeloid')
+```
+
+
+### Standard preprocessing steps for ADT assay
+
+```{r adt prep}
+# use dsb to correct for background noise and normalize the assay
+DefaultAssay(pbmc.mld2) <- 'ADT'
+#rownames(pbmc.mld2)
+
+# ADT Isotypes controls (mouse and rat isotypes)
+adt.IsotypeControl.list = c("IgG1-1",
+                            "IgG2a-1",
+                            "IgG2b-1",
+                            "IgG1-2",
+                            "IgG2a-2",
+                            "IgG2b-2",
+                            "IgG")
+# extract raw ADT count
+adt = GetAssayData(pbmc.mld2, slot = 'counts', assay = 'ADT')
+# normalize ADTs
+dsb.norm = ModelNegativeADTnorm(cell_protein_matrix = adt,
+                                denoise.counts = TRUE, 
+                                use.isotype.control = TRUE, 
+                                isotype.control.name.vec = adt.IsotypeControl.list)
+
+# plot a few proteins to check the results
+d = as.data.frame(t(dsb.norm))
+par(mfrow = c(4,2))
+hist(adt["CD4", ], breaks = 45, col = 'red', main = "CD4", xlab = 'Raw ADT')
+hist(d[, "CD4"], breaks = 45, col = '#009ACD80', main = "CD4", xlab = 'ModelNegativeADTnorm')
+hist(adt["CD8",], breaks = 45, col = 'red', main = "CD8", xlab = 'Raw ADT')
+hist(d[, "CD8"], breaks = 45, col = '#009ACD80', main = "CD8", xlab = 'ModelNegativeADTnorm')
+hist(adt["CD3",], breaks = 45, col = 'red', main = "CD3", xlab = 'Raw ADT')
+hist(d[, "CD3"], breaks = 45, col = '#009ACD80', main = "CD3", xlab = 'ModelNegativeADTnorm')
+hist(adt["CD88",], breaks = 45, col = 'red', main = "CD88", xlab = 'Raw ADT')
+hist(d[, "CD88"], breaks = 45, col = '#009ACD80', main = "CD88", xlab = 'ModelNegativeADTnorm')
+```
+
+```{r adt prep2}
+# add the normalized data to the Seurat object
+pbmc.mld2 = SetAssayData(pbmc.mld2, slot = 'data', 
+                    assay = 'ADT', 
+                    new.data = dsb.norm)
+# scale
+VariableFeatures(pbmc.mld2) <- rownames(pbmc.mld2[["ADT"]])
+pbmc.mld2 <- ScaleData(pbmc.mld2, assay = "ADT")
+pbmc.mld2 <- RunPCA(pbmc.mld2, features = rownames(pbmc.mld2), reduction.name = "adt_pca_myeloid", reduction.key = "adtPcaMyeloid_", verbose = FALSE)
+DimPlot(pbmc.mld2, reduction = "adt_pca_myeloid")
+DimPlot(pbmc.mld2, reduction = "adt_pca")
+ElbowPlot(pbmc.mld2,reduction = "adt_pca_myeloid")
+```
+
+### WNN clustering
+
+```{r mld2 recluster,fig.width=16, fig.height = 12}
+# run WNN 
+pbmc.mld2 <- FindMultiModalNeighbors(
+  pbmc.mld2, reduction.list = list("pca_myeloid", "adt_pca_myeloid"), 
+  dims.list = list(1:20, 1:20), modality.weight.name = c("RNA.weight.myeloid",'ADT.weight.myeloid'), weighted.nn.name = 'weighted.nn.myeloid',
+  knn.graph.name = "wknn.myeloid", snn.graph.name = "wsnn.myeloid"
+)
+pbmc.mld2 <- RunUMAP(pbmc.mld2, nn.name = "weighted.nn.myeloid", 
+                reduction.name = "wnn.umap.myeloid", 
+                reduction.key = "wnnUMAPmyloid_")
+# find clusters with different resolution (0.2 to 1.0)
+plot.umap.varyingRes2=NULL
+for (i in seq(0.1,1,by=0.1)) {
+  pbmc.mld2 <- FindClusters(pbmc.mld2, graph.name = "wsnn.myeloid", 
+                       algorithm = 3, resolution = i,
+                       verbose = FALSE)
+  p1 <- DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", label=T) +  NoLegend()
+  name.temp = paste0('p',i)
+  assign(name.temp,p1)
+  print(i)
+  print("finished")
+}
+plot.umap.varyingRes2 = plot_grid(p0.1,p0.2,p0.3,p0.4,p0.5,p0.6,p0.7,p0.8,p0.9,p1, labels = c(paste0('res=', seq(0.1,1,by=0.1))), ncol=5)
+plot.umap.varyingRes2
+```
+
+### Review clusters
+
+The Dimplot shows: 
+1. The controls (first line in the split dimplot) are relatively more similar to each other in comparison with the patient group
+2. On the group-level comparison, patients have more cells in cluster 1, especially in HMM, JG and NYP.
+3. GPG has an distinctly dense cluster 2, JG has substantially more cells in clusetrs 1 and 4, MMA has a distinctly dense cluster 3
+
+```{r curate clusters,fig.width=16, fig.height = 12}
+Idents(pbmc.mld2) <- "wsnn.myeloid_res.0.2" 
+DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", label=T)
+DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", split.by = 'wsnn.myeloid_res.0.2', ncol = 3, label=T)
+DimPlot(pbmc.mld2, reduction = "wnn.umap.myeloid", split.by = 'orig.ident', ncol = 3, label=T)
+```
+
+### Cluster frequency calculation
+
+```{r cluster freq,fig.width=5, fig.height = 5}
+
+pbmc.mld2@meta.data$myeloid_Clusters = pbmc.mld2@meta.data$wsnn.myeloid_res.0.2
+pbmc.mld2.cluFreq = cluster_freq(pbmc.mld2,'orig.ident','myeloid_Clusters')
+ggplot(data = pbmc.mld2.cluFreq, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = myeloid_Clusters)) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Myeloid cells cluster frequency') +
+  guides(fill=guide_legend(nrow=2))
+```
+
+
+## Save and show session info {.tabset}
+
+### Save the seurat object as .rds files
+```{r save}
+saveRDS(pbmc.mld2,'pbmc.mld2.RDS')
+```
+
+### Session info
+```{r sessioninfo}
+sessionInfo()
+```

@@ -1,0 +1,782 @@
+---
+title: "Celltype annotation"
+author: "Yue (Gary) Zhang"
+date: "2023-09-06"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{css, echo=FALSE}
+pre {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+pre[class] {
+  max-height: 300px;
+}
+```
+
+## Preparation {.tabset}
+
+### Load packages
+
+```{r Initiate, echo=FALSE}
+## initiate ---------------------------------------------------------
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+    "dplyr",
+    "Seurat",
+    "patchwork",
+    "ggplot2",
+    "ggrepel",
+    "readxl",
+    "future",
+    "cowplot",
+    "Azimuth",
+    "dsb",
+    "corrplot",
+    "DT",
+    "tidyr",
+    "ggpubr"
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+    lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+### Customized functions
+Functions cluster_freq and plot_de_volcano_scatter were created.
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+# remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+# calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+df$p_val_adj_log10 = -log10(df$p_val_adj)
+df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+# generate summary statistics to show on caption
+minFDR <- -log10(maxq)
+sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+
+cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+if(showsub) {
+  subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                     " (FDR<", maxq, ", log2FC>", minLFC, ")")
+} else {
+  subtitle <- NULL
+}
+
+p1 = ggplot(df) +
+  geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+  geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+  geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+  facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+
+df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+  geom_point() +
+  facet_wrap(~ Celltype_tested, scales = 'free') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+return(list(p1,p2))
+}
+```
+
+
+## session 6 -------------------------------
+
+```{r session 6}
+pbmc = readRDS(file = "srt.obj.merged.ADTdsb.RDS")
+pbmc <- RunUMAP(pbmc, nn.name = "weighted.nn", 
+                reduction.name = "wnn.umap", 
+                reduction.key = "wnnUMAP_")
+# find clusters with different resolution (0.2 to 1.0)
+plot.umap.varyingRes=NULL
+for (i in seq(0.1,1,by=0.1)) {
+  pbmc <- FindClusters(pbmc, graph.name = "wsnn", 
+                       algorithm = 3, resolution = i,
+                       verbose = FALSE)
+  #pbmc@meta.data[,paste0('seurat_clusters_res',i)] = pbmc@meta.data$seurat_clusters
+  p1 <- DimPlot(pbmc, reduction = "wnn.umap", label=T) +  NoLegend()
+  name.temp = paste0('p',i)
+  assign(name.temp,p1)
+  print(i)
+  print("finished")
+}
+
+plot.umap.varyingRes = plot_grid(p0.1,p0.2,p0.3,p0.4,p0.5,p0.6,p0.7,p0.8,p0.9,p1, labels = c(paste0('res=', seq(0.1,1,by=0.1))), ncol=5)
+save_plot(plot = plot.umap.varyingRes, paste0('plot_umap_resolution_wnn', '.png'), base_height = 15, base_width = 20)
+
+# run Azimuth using both adt and rna data
+pbmc  = RunAzimuth(pbmc, reference = 'pbmcref',do.adt = T,umap.name = 'ref.adt.umap')
+
+
+(p.wnn <- DimPlot(pbmc, reduction = 'wnn.umap', 
+                  group.by = 'predicted.celltype.l1',
+                  label = TRUE, repel = TRUE,
+                  label.size = 5) + NoLegend())
+(p.adt = DimPlot(pbmc, reduction = "adt_umap",
+                 group.by = "predicted.celltype.l1", 
+                 label = TRUE, label.size = 5, repel = T) + NoLegend())
+(p.rna = DimPlot(pbmc, reduction = 'umap',
+                 group.by = "predicted.celltype.l1", 
+                 label = TRUE, label.size = 5) + NoLegend())
+p.dimplot.3modalities = cowplot::plot_grid(p.rna,p.adt,p.wnn,ncol=3,labels = c('RNA','ADT','WNN'))
+save_plot(plot = p.dimplot.3modalities, paste0('plot_wnn_adt_rna', '.png'), base_height = 12, base_width = 20)
+
+(p.wnn <- DimPlot(pbmc, reduction = 'wnn.umap', 
+                  group.by = 'predicted.celltype.l2',
+                  label = TRUE, repel = TRUE,
+                  label.size = 5) + NoLegend())
+
+## manually curate cell annotations based on Azimuth
+Idents(pbmc) = pbmc$wsnn_res.0.2
+cluster.markers.RNA = FindAllMarkers(pbmc,assay = 'RNA',min.pct = 0.5, only.pos = F, logfc.threshold = 0.25)
+cluster.markers.ADT = FindAllMarkers(pbmc,assay = 'ADT',min.pct = 0.5, only.pos = F, logfc.threshold = 0.25)
+
+# CD4 T
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.cd4t.rna <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("IL7R", "MAL", "LTB", "CD4", "LDHB", "TPT1", "TRAC", "TMSB10", "CD3D", "CD3G"))) 
+plot.ftplot.cd4t.rna <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD4"))
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.cd4t.adt <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("CD4"),min.cutoff = 0, cols = c('grey','red'))) 
+(plot.ftplot.cd4t = plot_grid(plot.ftplot.cd4t.rna,plot.ftplot.cd4t.adt, ncol = 2))
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("0","14","15","16","4")] = "CD4 T"
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# CD8 T
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.cd8t.rna <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("CD8B", "CD8A", "CD3D", "TMSB10", "HCST", "CD3G", "LINC02446", "CTSW", "CD3E", "TRAC"))) 
+plot.ftplot.cd8t.rna <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD8A", "CD8B"))
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.cd8t.adt <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("CD2", "CD3", "CD5", "CD8", "CD25", "CD27", "CD28"),min.cutoff = 0)) 
+plot.ftplot.cd8t.adt <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD8"),cols = c('grey','red')) 
+
+(plot.ftplot.cd8t = plot.ftplot.cd8t.rna+plot.ftplot.cd8t.adt)
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("5","2")] = "CD8 T"
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# NK
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.nk.rna <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("GNLY", "NKG7", "KLRD1", "TYROBP", "FCER1G", "PRF1", "CD247", "KLRF1", "CST7", "GZMB"))) 
+plot.ftplot.nk.rna <- FeaturePlot(pbmc, 
+                                  reduction = 'wnn.umap',
+                                  features = c("TYROBP", "FCER1G"))
+
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.nk.adt <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("CD56","CD3", "CD16", "CD57"),min.cutoff = 0)) # they should be CD3- CD56+ CD16+ CD57+
+plot.ftplot.nk.adt <- FeaturePlot(pbmc, 
+                                  reduction = 'wnn.umap',
+                                  features = c("CD3", "CD16"),min.cutoff = 0,cols = c('grey','red')) # CD3- CD16+
+
+(plot.ftplot.nk = plot_grid(plot.ftplot.nk.rna,plot.ftplot.nk.adt, ncol = 1))
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("7")] = "NK"
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# other T cells
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.otherT.rna <- FeaturePlot(pbmc, 
+                                       reduction = 'wnn.umap',
+                                       features = c("CD3D", "TRDC", "GZMK", "KLRB1", "NKG7", "TRGC2", "CST7", "LYAR", "KLRG1", "GZMA"))) 
+(plot.ftplot.otherT <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("CD3D", "KLRB1")))
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("6","9")] = "Other T"
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# B cells
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.b.rna <- FeaturePlot(pbmc, 
+                                  reduction = 'wnn.umap',
+                                  features = c("CD79A", "RALGPS2", "CD79B", "MS4A1", "BANK1", "CD74", "TNFRSF13C", "HLA-DQA1", "IGHM", "MEF2C"))) # B
+plot.ftplot.b.rna <- FeaturePlot(pbmc, 
+                                 reduction = 'wnn.umap',
+                                 features = c("CD79A", "CD79B"))
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.b.adt <- FeaturePlot(pbmc, 
+                                  reduction = 'wnn.umap',
+                                  features = c("CD19","IgM"), cols = c('grey','red'),min.cutoff = 0))  # B
+
+(plot.ftplot.b = plot_grid(plot.ftplot.b.rna, plot.ftplot.b.adt,nrow = 2))
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("3")] = "B"
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# Plasmablast B
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.plasmablast.rna <- FeaturePlot(pbmc, 
+                                            reduction = 'wnn.umap',
+                                            features = c("IGHA2", "MZB1", "TNFRSF17", "DERL3", "TXNDC5", "TNFRSF13B", "POU2AF1", "CPNE5", "HRASLS2", "NT5DC2"))) 
+plot.ftplot.plasmablast.rna <- FeaturePlot(pbmc, 
+                                           reduction = 'wnn.umap',
+                                           features = c("MZB1", "TNFRSF17"))
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.plasmablast.adt <- FeaturePlot(pbmc, 
+                                            reduction = 'wnn.umap',
+                                            features = c("CD38"), cols = c('grey','red'),min.cutoff = 0))  
+Idents(pbmc) = 'predicted.celltype.l2'
+clusterAzPlasmablast.markers.rna = FindMarkers(pbmc,ident.1 = "Plasmablast", assay = 'RNA',min.pct = 0.5, only.pos = T, logfc.threshold = 0.25)
+clusterAzPlasmablast.markers.rna[order(clusterAzPlasmablast.markers.rna$avg_log2FC,decreasing = T),] #  IGHA2, MZB1, TNFRSF17, DERL3, TXNDC5, POU2AF1 are highly expressed
+clusterAzPlasmablast.markers.adt = FindMarkers(pbmc,ident.1 = "Plasmablast", assay = 'ADT',min.pct = 0.5, only.pos = F, logfc.threshold = 0.25)
+clusterAzPlasmablast.markers.adt[order(clusterAzPlasmablast.markers.adt$avg_log2FC,decreasing = T),] # CD38 is among the top (+) 
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$predicted.celltype.l2 %in% c("Plasmablast")] = "Plasmablast B"
+Idents(pbmc) = 'curated_clusters'
+DimPlot(pbmc, reduction = 'wnn.umap', split.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# dendric cells
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.dc.rna <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("FCER1A", "CST3"))) # DC
+(plot.ftplot.cdc1.rna <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("CLEC9A", "DNASE1L3", "C1orf54", "IDO1", "CLNK", "CADM1", "FLT3", "ENPP1", "XCR1", "NDRG2"))) # cDC1
+(plot.ftplot.cdc2.rna <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("FCER1A", "HLA-DQA1", "CLEC10A", "CD1C", "ENHO", "PLD4", "GSN", "SLC38A1", "NDRG2", "AFF3"))) # cDC2
+
+plot.ftplot.cdc.rna <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("FCER1A", "CLEC10A", "ENHO"))
+
+
+(plot.ftplot.pdc.rna <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "MZB1", "SPIB", "IRF4", "SMPD3"))) # pDC
+plot.ftplot.pdc.rna <- FeaturePlot(pbmc, 
+                                   reduction = 'wnn.umap',
+                                   features = c("SERPINF1", "LILRA4"))
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.cDC.adt <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD8","CD11b","CD11c","CD103"))) # cDC
+(plot.ftplot.pDC.adt <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD303","CD11c"))) # pDC
+
+
+(plot.ftplot.dc = plot_grid(plot.ftplot.cdc.rna,plot.ftplot.pdc.rna, nrow = 2))
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("11")] = "pDC"
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("12")] = "cDC"
+DimPlot(pbmc, reduction = 'wnn.umap', group.by =  "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# Monocyte
+# CD14 monocyte
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.cd14mono.rna <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("S100A9", "CTSS", "S100A8", "LYZ", "VCAN", "S100A12", "IL1B", "CD14", "G0S2", "FCN1"))) # CD14+ Mono                            
+plot.ftplot.cd14mono.rna <- FeaturePlot(pbmc, 
+                                        reduction = 'wnn.umap',
+                                        features = c("CD14")) # CD14+ Mono                            
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.cd14mono.adt <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("CD14"),cols = c('grey','red'), min.cutoff = 0)) # CD14+ Mono 
+(plot.ftplot.cd14mono = plot.ftplot.cd14mono.rna + plot.ftplot.cd14mono.adt)
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("1","8")] = "CD14 Mono"
+DimPlot(pbmc, reduction = 'wnn.umap', group.by =  "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# CD16 Mono
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.cd16mono.rna <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("CDKN1C", "FCGR3A", "PTPRC", "LST1", "IER5", "MS4A7", "RHOC", "IFITM3", "AIF1", "HES4"))) # CD16+ Mono                            
+plot.ftplot.cd16mono.rna <- FeaturePlot(pbmc, 
+                                        reduction = 'wnn.umap',
+                                        features = c("CDKN1C", "FCGR3A")) # CD16+ Mono
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.cd16mono.adt <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("CD16"),cols = c('grey','red'), min.cutoff = 0)) # CD14+ Mono 
+(plot.ftplot.cd16mono = plot.ftplot.cd16mono.rna + plot.ftplot.cd16mono.adt)
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$wsnn_res.0.2 %in% c("10")] = "CD16 Mono"
+DimPlot(pbmc, reduction = 'wnn.umap', group.by =  "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+# Platelet
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.platelet.rna <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("PPBP"))) # platelet; a half of cluster 13 has strong PPBP
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.platelet.adt <- FeaturePlot(pbmc, 
+                                         reduction = 'wnn.umap',
+                                         features = c("CD41","CD42b","CD62P","CD2"),min.cutoff = 0)) # platelet; CD42b and CD2 have stronger signal at cluster 13
+
+plot.ftplot.platelet.adt <- FeaturePlot(pbmc, 
+                                        reduction = 'wnn.umap',
+                                        features = c("CD42b","CD2"),min.cutoff = 0, cols = c("grey","red"))
+
+(plot.ftplot.platelet = plot.ftplot.platelet.rna + plot.ftplot.platelet.adt)
+Idents(pbmc) = 'predicted.celltype.l2'
+clusterAzPlatelet.markers.rna = FindMarkers(pbmc,ident.1 = "Platelet", assay = 'RNA',min.pct = 0.5, only.pos = T, logfc.threshold = 0.25)
+clusterAzPlatelet.markers.rna[order(clusterAzPlatelet.markers.rna$avg_log2FC,decreasing = T),] # PPBP, PF4, NRGN, GNG11, CAVIN2 and etc are at the top of the list; this is Platelet
+clusterAzPlatelet.markers.adt = FindMarkers(pbmc,ident.1 = "Platelet", assay = 'ADT',min.pct = 0.5, only.pos = T, logfc.threshold = 0.25)
+clusterAzPlatelet.markers.adt[order(clusterAzPlatelet.markers.adt$avg_log2FC,decreasing = T),] # CD2 and CD42b is among the top 
+pbmc@meta.data$curated_clusters[pbmc@meta.data$predicted.celltype.l2 %in% c("Platelet")] = "Platelet"
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters", label = TRUE, label.size = 5) + NoLegend()
+
+# Hematopoietic stem and progenitor cell (HSPC)
+DefaultAssay(pbmc) <- 'RNA'
+(plot.ftplot.hspc.rna <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("SPINK2", "PRSS57", "CYTL1", "EGFL7", "GATA2", "CD34", "SMIM24", "AVP", "MYB", "LAPTM4B"))) 
+plot.ftplot.hspc.rna <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c( "GATA2", "CD34"))
+
+
+DefaultAssay(pbmc) <- 'ADT'
+(plot.ftplot.hspc.adt <- FeaturePlot(pbmc, 
+                                     reduction = 'wnn.umap',
+                                     features = c("CD38","CD45RA","CD49f"),min.cutoff = 0)) 
+plot.ftplot.hspc.adt <- FeaturePlot(pbmc, 
+                                    reduction = 'wnn.umap',
+                                    features = c("CD45RA"),min.cutoff = 0,cols = c('grey','red')) 
+(plot.ftplot.hspc = plot.ftplot.hspc.rna + plot.ftplot.hspc.adt) # disagreed between RNA and ADT
+
+Idents(pbmc) = 'predicted.celltype.l2'
+clusterAzHSPC.markers.rna = FindMarkers(pbmc,ident.1 = "HSPC", assay = 'RNA',min.pct = 0.5, only.pos = T, logfc.threshold = 0.25)
+clusterAzHSPC.markers.rna[order(clusterAzHSPC.markers.rna$avg_log2FC,decreasing = T),] # PRSS57 and GATA2 is among the top of the list
+clusterAzHSPC.markers.adt = FindMarkers(pbmc,ident.1 = "HSPC", assay = 'ADT',min.pct = 0.5, only.pos = T, logfc.threshold = 0.25)
+clusterAzHSPC.markers.adt[order(clusterAzHSPC.markers.adt$avg_log2FC,decreasing = T),] # No target marker is significant
+
+pbmc@meta.data$curated_clusters[pbmc@meta.data$predicted.celltype.l2 %in% c("HSPC")] = "HSPC"
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+pbmc@meta.data$curated_clusters[is.na(pbmc@meta.data$curated_clusters)] = "Unclassified"
+summary(as.factor(pbmc@meta.data$curated_clusters))
+
+# add a lower level of resolution
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("CD8 T", "CD4 T", "Other T")] = "T cell"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("NK")] = "NK"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("B", "Plasmablast B")] = "B cell"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("pDC", "cDC")] = "DC"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("HSPC")] = "HSPC"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("Platelet")] = "Platelet"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("CD14 Mono", "CD16 Mono")] = "Monocyte"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("Unclassified")] = "Unclassified"
+summary(as.factor(pbmc@meta.data$curated_clusters2))
+
+
+# calculate cluster frequency -- cluster2 (lower resolution)
+cluster_frequency.curated_clusters2 <- pbmc@meta.data %>%
+  group_by(orig.ident, curated_clusters2) %>%
+  summarise(count=n()) %>%
+  mutate(relative_frequency = count/sum(count))
+
+cluster_frequency.curated_clusters2$group = ifelse(cluster_frequency.curated_clusters2$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+cluster_frequency.curated_clusters2$orig.ident = factor(cluster_frequency.curated_clusters2$orig.ident, levels = c('FYJ', 'SRN', 'VR',
+                                                                                                                   'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+ggplot(data = cluster_frequency.curated_clusters2, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = curated_clusters2)) +
+  geom_bar(position = 'fill', stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Relative Abundance') +
+  guides(fill=guide_legend(nrow=2))
+ggsave(paste0('plot.ggbar.curated_cluster2', '.png'),width = 10, height = 5, device = 'png')
+# seems Trisomy group has higher frequency of T while less B
+
+# calculate cluster frequency -- cluster1 (higher resolution)
+cluster_frequency.curated_clusters <- pbmc@meta.data %>%
+  group_by(orig.ident, curated_clusters) %>%
+  summarise(count=n()) %>%
+  mutate(relative_frequency = count/sum(count))
+
+cluster_frequency.curated_clusters$group = ifelse(cluster_frequency.curated_clusters$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+cluster_frequency.curated_clusters$orig.ident = factor(cluster_frequency.curated_clusters$orig.ident, levels = c('FYJ', 'SRN', 'VR',
+                                                                                                                 'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+ggplot(data = cluster_frequency.curated_clusters, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = curated_clusters)) +
+  geom_bar(position = 'fill', stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Relative Abundance') +
+  guides(fill=guide_legend(nrow=2))
+ggsave(paste0('plot.ggbar.curated_cluster', '.png'),width = 10, height = 5, device = 'png')
+
+# calculate cluster frequency -- Azimuth level 1
+cluster_frequency.predicted.celltype.l1 <- pbmc@meta.data %>%
+  group_by(orig.ident, predicted.celltype.l1) %>%
+  summarise(count=n()) %>%
+  mutate(relative_frequency = count/sum(count))
+cluster_frequency.predicted.celltype.l1$predicted.celltype.l1.update = cluster_frequency.predicted.celltype.l1$predicted.celltype.l1
+cluster_frequency.predicted.celltype.l1$predicted.celltype.l1.update[cluster_frequency.predicted.celltype.l1$predicted.celltype.l1 %in% c('CD4 T', 'CD8 T', 'other T')] = 'T'
+cluster_frequency.predicted.celltype.l1$group = ifelse(cluster_frequency.predicted.celltype.l1$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+cluster_frequency.predicted.celltype.l1$orig.ident = factor(cluster_frequency.predicted.celltype.l1$orig.ident, levels = c('FYJ', 'SRN', 'VR',
+                                                                                                                           'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+ggplot(data = cluster_frequency.predicted.celltype.l1, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = predicted.celltype.l1.update)) +
+  geom_bar(position = 'fill', stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Relative Abundance') +
+  guides(fill=guide_legend(nrow=2))
+ggsave(paste0('cluster_frequency.predicted.celltype.l1', '.png'),width = 10, height = 5, device = 'png')
+
+saveRDS(pbmc,'srt.obj.merged.clusterCurated.RDS')
+save.image(file = "session6.RData")
+```
+
+
+# Cell cluster re-annotation (session 13)
+
+### Load seurat object
+load srt.obj.merged.clusterCurated.RDS
+```{r load pbmc}
+pbmc = readRDS('srt.obj.merged.clusterCurated.RDS')
+pbmc.copy1 = pbmc
+```
+
+## Re-organize previously annotated cell clusters cell cluster classification {.tabset}
+
+### Reiterate partial cell annotation procedure
+
+```{r organize classification, fig.width=10, fig.height=10, class.source = 'fold-show'}
+# add a lower level of resolution
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("CD8 T", "CD4 T", "Other T")] = "T cell"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("NK")] = "NK"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("B", "Plasmablast B")] = "B cell"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("pDC", "cDC")] = "DC"
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("CD14 Mono", "CD16 Mono")] = "Monocyte"
+# HSPC and Platelet are usually disregarded
+#pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("Unclassified")] = "Unclassified"
+#pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("HSPC")] = "HSPC"
+#pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("Platelet")] = "Platelet"
+
+pbmc@meta.data$curated_clusters2[pbmc@meta.data$curated_clusters %in% c("Unclassified", "HSPC","Platelet")] = "Other"
+summary(as.factor(pbmc@meta.data$curated_clusters2))
+
+# add curated_cluster3 -- which is same as curated_cluster except that HSPC, Platelet and unclassified are grouped as "other"
+pbmc@meta.data$curated_clusters3 = pbmc@meta.data$curated_clusters
+pbmc@meta.data$curated_clusters3[pbmc@meta.data$curated_clusters %in% c("Unclassified", "HSPC","Platelet")] = "Other"
+summary(as.factor(pbmc@meta.data$curated_clusters3))
+```
+
+### Dimplot grouped by curated clusters at the lower resolution
+
+```{r Dimplot c2}
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+### Dimplot grouped by curated clusters at the higher resolution
+
+```{r Dimplot c3}
+DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+## Re-annotate the cell clusters using resolution = 0.3 and based on Azimuth L2 {.tabset}
+
+### Azimuth annotation
+```{r Dimplot Azimuth L2,fig.width=18, fig.height = 6}
+p1 = DimPlot(pbmc, reduction = 'wnn.umap', group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+p2 = DimPlot(pbmc, reduction = 'wnn.umap', group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+p3 = DimPlot(pbmc, reduction = 'wnn.umap', group.by = "predicted.celltype.l3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+p1 + p2 + p3
+```
+
+### CD4 T cells re-annotation
+
+```{r cd4t dimplot,fig.width=12, fig.height = 6}
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T'), reduction = 'wnn.umap', split.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM')& curated_clusters3 == 'CD4 T'), reduction = 'wnn.umap', group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM')& curated_clusters3 == 'CD4 T'), reduction = 'wnn.umap', split.by = "group", group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+```
+TN, TCM, Treg are largely overlapped. We need to check the expression of markers.
+
+The progression of T-cells from TN to TEMRA cells is accompanied by characteristic changes in antigen expression of surface markers including CD45RA, CD45RO, CCR7, CD62L, CD27, and CD28, which can be used to define the T-cell subsets. 
+
+TN cells are CD45RA+CD45RO−CCR7+CD62L+CD27+CD28+. 
+
+After antigen stimulation, TN cells lose CD45RA and gain expression of CD45RO and become TCM cells. 
+
+As TCM cells progress to TEM cells, they further lose expression of CCR7, CD62L, CD27, and CD28. 
+
+At the last stage, TEMRA cells regain expression of CD45RA with loss of CD45RO. TEMRA cells are otherwise differentiated from TN cells by the absence of expression of CCR7, CD62L, CD27, and CD28.
+
+PTPRC gene codes CD45RA and CD45RO
+
+SELL gene codes CD62L
+
+```{r CD4 T featureplot, fig.width=45, fig.height=15}
+DefaultAssay(pbmc) <- 'RNA'
+p1 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T'),
+                                     reduction = 'wnn.umap',
+                                     features = c("PTPRC", "CCR7", "SELL", "CD27", "CD28"))
+
+DefaultAssay(pbmc) <- 'ADT'
+p2 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T'),
+                                     reduction = 'wnn.umap',
+                                     features = c("CD45RA", "CD45RO", "CD62L", "CD27", "CD28"),cols = c('grey','red'),min.cutoff = 0)
+p3 = DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T'),
+             reduction = 'wnn.umap', group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+plot_grid(p1,p2,p3,ncol=3)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T'),
+             reduction = 'wnn.umap', group.by = "wsnn_res.0.3", split.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+```{r cd4 t vlnplot,fig.height = 12, fig.width=4}
+DefaultAssay(pbmc) <- 'RNA'
+Idents(pbmc) <- "wsnn_res.0.3"
+VlnPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD4 Naive','CD4 TCM','Treg', 'CD4 TEM') & curated_clusters3 == 'CD4 T' & wsnn_res.0.3 %in% c("0", "3")) ,features = c("PTPRC", "CCR7", "SELL", "CD27", "CD28","adt_CD45RA", "adt_CD45RO", "adt_CD62L", "adt_CD27", "adt_CD28"),stack = TRUE, flip = TRUE, fill.by = "ident")
+```
+
+CCR7, CD45RA, CD62L have higher expression in clusters 0. Thus, these clusters could be classified as CD4T Naive. 
+
+CD4T CM and CD4T EM are somehow overlapped, so I do not distinguish these two populations, instead, I group them as CD4T Memory. Clusters 3 should be CD4T Memory -- these three populations have lower CCR7, CD45RA, CD62L and higher CD45RO expression.
+
+Other clusters only had few cells, we can neglect them.
+
+```{r cd4t reannot}
+pbmc@meta.data$curated_clusters4 = pbmc@meta.data$curated_clusters3
+pbmc@meta.data %>%
+  mutate(curated_clusters4 = ifelse(wsnn_res.0.3 %in% c('0') & curated_clusters3 == 'CD4 T', 'CD4 T Naive', 
+                                    ifelse(wsnn_res.0.3 %in% c('3') & curated_clusters3 == 'CD4 T', 'CD4 T Memory',
+                                           ifelse(curated_clusters3 == 'CD4 T', 'Other CD4 T',curated_clusters4)))) ->pbmc@meta.data
+DimPlot(subset(pbmc, curated_clusters3 == 'CD4 T'),
+             reduction = 'wnn.umap', group.by = "curated_clusters4", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+### CD8 T cells reannotation
+
+```{r cd8t dimplot,fig.width=12, fig.height = 6}
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'), reduction = 'wnn.umap', split.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'), reduction = 'wnn.umap', group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'), reduction = 'wnn.umap', split.by = "group", group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+```
+
+```{r CD8 T featureplot, fig.width=45, fig.height=15}
+DefaultAssay(pbmc) <- 'RNA'
+p1 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'),
+                                     reduction = 'wnn.umap',
+                                     features = c("PTPRC", "CCR7", "SELL", "CD27", "CD28"))
+
+DefaultAssay(pbmc) <- 'ADT'
+p2 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'),
+                                     reduction = 'wnn.umap',
+                                     features = c("CD45RA", "CD45RO", "CD62L", "CD27", "CD28"),cols = c('grey','red'),min.cutoff = 0)
+
+p3 = DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'),
+             reduction = 'wnn.umap', group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+
+plot_grid(p1,p2,p3,ncol=3)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T'),
+        reduction = 'wnn.umap', split.by = "wsnn_res.0.3", group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T)
+```
+```{r cd8 t vlnplot,fig.height = 18, fig.width=6}
+DefaultAssay(pbmc) <- 'RNA'
+Idents(pbmc) <- "wsnn_res.0.3"
+VlnPlot(subset(pbmc, predicted.celltype.l2 %in% c('CD8 Naive','CD8 TCM', 'CD8 TEM') & curated_clusters3 == 'CD8 T' & wsnn_res.0.3 %in% c("2", "6", "12")) ,features = c("PTPRC", "CCR7", "SELL", "CD27", "CD28","adt_CD45RA", "adt_CD45RO", "adt_CD62L", "adt_CD27", "adt_CD28"),stack = TRUE, flip = TRUE, fill.by = "ident")
+```
+
+In CD8 T cell population, CD45RA, CCR7, SELL, CD27 were relatively higher expressed in clusters 2 -- they are likely to be CD8 T Naive. 
+Clusters 6 and 12 are likely to be CD8 T Memory
+
+```{r cd8 t reannot}
+pbmc@meta.data %>%
+  mutate(curated_clusters4 = ifelse(wsnn_res.0.3 %in% c('2') & curated_clusters3 == 'CD8 T', 'CD8 T Naive', 
+                                    ifelse(wsnn_res.0.3 %in% c('6','12') & curated_clusters3 == 'CD8 T', 'CD8 T Memory',
+                                           ifelse(curated_clusters3 == 'CD8 T','Other CD8 T',curated_clusters4)))) ->pbmc@meta.data
+DimPlot(subset(pbmc, curated_clusters3 == 'CD8 T'),
+             reduction = 'wnn.umap', group.by = "curated_clusters4", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+### B cells reannotation (excluding plasmablast B)
+
+
+```{r B dimplot,fig.width=12, fig.height = 6}
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'), reduction = 'wnn.umap', split.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'), reduction = 'wnn.umap', group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'), reduction = 'wnn.umap', split.by = "group", group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+```
+
+CD27: CD27 (gene name: TNFRSF7) is a marker that is typically expressed on memory B cells but not on naïve B cells. It is often used to identify and distinguish memory B cells.
+
+Immunoglobulin Isotype: B cells express a specific type of immunoglobulin receptor on their surface, depending on their developmental stage and antigen exposure. Naïve B cells typically express IgD and IgM on their surface, whereas memory B cells may express other immunoglobulin isotypes such as IgG, IgA, or IgE, depending on their class-switching history. We have Igd and IgM in our ADT database (IgG in our database is from mouse as control)
+
+CD21 (CR2): CD21, also known as complement receptor 2 (CR2), is expressed on naïve B cells but not on memory B cells. It plays a role in B cell activation and antigen recognition.
+
+```{r B featureplot, fig.width=45, fig.height=15}
+DefaultAssay(pbmc) <- 'RNA'
+p1 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'),
+                                     reduction = 'wnn.umap',
+                                     features = c("TNFRSF7",'CR2'))
+
+DefaultAssay(pbmc) <- 'ADT'
+p2 <- FeaturePlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'),
+                                     reduction = 'wnn.umap',
+                                     features = c("CD21","CD27","IgD","IgM"),cols = c('grey','red'),min.cutoff = 0)
+p3 = DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B'),
+             reduction = 'wnn.umap', group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+plot_grid(p1,p2,p3,ncol=3)
+
+```
+
+```{r B vlnplot,fig.height = 12, fig.width=4}
+DefaultAssay(pbmc) <- 'RNA'
+Idents(pbmc) <- "wsnn_res.0.3"
+VlnPlot(subset(pbmc, predicted.celltype.l2 %in% c('B naive','B memory', 'B intermediate') & curated_clusters3 == 'B' & wsnn_res.0.3 %in% c("7", "10")) ,features = c("CR2", "adt_CD21","adt_CD27","adt_IgD","adt_IgM"),stack = TRUE, flip = TRUE, fill.by = "ident")
+```
+
+Based on Azimuth classification and the feature plot, cluster 7 is B naive (IgD+), and cluster 10 is B memory (IgD-). The feature plot also shows that cluster 7 has lower CD27 expression, but it is not clear in the violin plot
+
+```{r B reannot}
+pbmc@meta.data %>%
+  mutate(curated_clusters4 = ifelse(wsnn_res.0.3 %in% c('7') & curated_clusters3 == 'B', 'B Naive', 
+                                    ifelse(wsnn_res.0.3 %in% c('10') & curated_clusters3 == 'B', 'B memory',
+                                           ifelse(curated_clusters3 == 'B', 'Other B', curated_clusters4)))) ->pbmc@meta.data
+DimPlot(subset(pbmc, curated_clusters3 == 'B'),
+             reduction = 'wnn.umap', group.by = "curated_clusters4", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+### Other T cell region reannotation
+
+```{r other T dimplot,fig.width=12,fig.height = 6}
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T'), reduction = 'wnn.umap', split.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + NoLegend()
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T'), reduction = 'wnn.umap', split.by = "group", group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T)
+DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T'), reduction = 'wnn.umap', group.by = "predicted.celltype.l2", label = TRUE, label.size = 5, repel = T) + DimPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T'), reduction = 'wnn.umap',  group.by = "wsnn_res.0.3", label = TRUE, label.size = 5, repel = T)
+``` 
+
+```{r OT vlnplot,fig.height = 16, fig.width=8}
+DefaultAssay(pbmc) <- 'RNA'
+Idents(pbmc) <- "wsnn_res.0.3"
+# Azimuth MAIT markers
+p1 = VlnPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T' & wsnn_res.0.3 %in% c("4", "9")) ,features = c('KLRB1', 'NKG7', 'GZMK', 'IL7R', 'SLC4A10', 'GZMA', 'CXCR6', 'PRSS35', 'RBM24', 'NCR3'),stack = TRUE, flip = TRUE, fill.by = "ident")
+# Azimuth dgT markers
+p2 = VlnPlot(subset(pbmc, predicted.celltype.l2 %in% c('gdT','MAIT','CD8 Proliferating') & curated_clusters3 == 'Other T' & wsnn_res.0.3 %in% c("4", "9")) ,features = c('TRDC', 'TRGC1', 'TRGC2', 'KLRC1', 'NKG7', 'TRDV2', 'CD7', 'TRGV9', 'KLRD1', 'KLRG1'),stack = TRUE, flip = TRUE, fill.by = "ident")
+plot_grid(p1,p2,ncol = 2,labels = c('MAIT markers','dgT markers'))
+```
+
+Based on Azimuth annotation, cluster 9 = MAIT and cluster 4 = gdT
+
+```{r other T reannot}
+pbmc@meta.data %>%
+  mutate(curated_clusters4 = ifelse(wsnn_res.0.3 %in% c('9') & curated_clusters3 == 'Other T', 'MAIT', 
+                                    ifelse(wsnn_res.0.3 %in% c('4') & curated_clusters3 == 'Other T', 'gdT',
+                                           ifelse(curated_clusters3 == 'Other T', 'Other T', curated_clusters4)))) ->pbmc@meta.data
+DimPlot(subset(pbmc, curated_clusters3 == 'Other T'),
+             reduction = 'wnn.umap', group.by = "curated_clusters4", label = TRUE, label.size = 5, repel = T) + NoLegend()
+```
+
+### Compare before and after annotation refinement
+
+```{r compare,fig.width=16, fig.height = 8}
+pbmc.classifiedSet = subset(pbmc, !(pbmc$curated_clusters4 %in% c('Other','Other T', 'Other CD4 T', 'Other CD8 T')))
+summary(as.factor(pbmc.classifiedSet$curated_clusters4))
+p1 = DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
+p2 = DimPlot(pbmc.classifiedSet, reduction = 'wnn.umap', group.by = "curated_clusters4", label = TRUE, label.size = 5, repel = T) + NoLegend()
+p1 + p2
+```
+
+## Save and show session info {.tabset}
+
+### Save the seurat object as .rds files
+```{r save}
+saveRDS(pbmc,'srt.obj.merged.clusterCuratedRefined.RDS')
+saveRDS(pbmc.classifiedSet,'srt.obj.merged.clusterCuratedRefined.classifiedSet.RDS')
+
+```
+
+### Session info
+```{r sessioninfo}
+sessionInfo()
+```
