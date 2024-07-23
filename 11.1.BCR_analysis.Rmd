@@ -1,0 +1,612 @@
+---
+title: "BCR Immcantation"
+date: "`r Sys.Date()`"
+author: Yue (Gary) Zhang, PhD
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = T, message = FALSE) 
+```
+
+# Preparation
+
+## Load packages and set variables
+
+```{r Initiate, results='hide'}
+## initiate ---------------------------------------------------------
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+  "dplyr",
+  "Seurat",
+  "patchwork",
+  "ggplot2",
+  "ggrepel",
+  "readxl",
+  "future",
+  "cowplot",
+  "Azimuth",
+  "dsb",
+  "corrplot",
+  "DT",
+  "tidyr",
+  "ggpubr",
+  "scRNAtoolVis",
+  "purrr",
+  "limma",
+  "wesanderson",
+  "reshape",
+  "edgeR",
+  'ggfun',
+  'ggrepel',
+  'fgsea',
+  'circlize',
+  'ComplexHeatmap',
+  'vegan',
+  "immunarch"
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+  lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# Immcantation required packages
+suppressPackageStartupMessages(library(airr))
+suppressPackageStartupMessages(library(alakazam))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(dowser))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(scoper))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(shazam))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+## Customized functions
+
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster,sex=F){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  if(sex == T){
+    freq$sex = cov$sex[match(freq$orig.ident,cov$sample)]
+    freq$group_sex = paste0(freq$group,'_',freq$sex)
+    freq$group_sex = factor(freq$group_sex, levels = c('control_F','trisomy8_F','control_M','trisomy8_M'))
+  }
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+  # remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+  df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+  # calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+  df$p_val_adj_log10 = -log10(df$p_val_adj)
+  df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+  # generate summary statistics to show on caption
+  minFDR <- -log10(maxq)
+  sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+  sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+  
+  cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+  cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+  if(showsub) {
+    subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                       " (FDR<", maxq, ", log2FC>", minLFC, ")")
+  } else {
+    subtitle <- NULL
+  }
+  
+  p1 = ggplot(df) +
+    geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+    geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+    geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+    facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+    theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+    geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+    geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+    geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+  
+  df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+  df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+  df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+  p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+    geom_point() +
+    facet_wrap(~ Celltype_tested, scales = 'free') +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    coord_flip() +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+  return(list(p1,p2))
+}
+
+create_dt <- function(df,caption){
+  datatable(df,
+            caption = caption,
+            extensions = 'Buttons',
+            options = list(dom = 'Blfrtip',
+                           buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                           lengthMenu = list(c(10,25,50,-1),
+                                             c(10,25,50,"All")),
+                           initComplete = JS(
+    "function(settings, json) {",
+    "$('caption').css({'font-size': '20px', 'font-family': 'Arial', 'font-weight': 'bold'});",
+    "}")))
+}
+
+# function to set a column as rownames and remove that column from the df; default is setting the first column as the rowname
+setrowname =  function(df,col = 1){
+  if (is.numeric(col)) {
+    # print('it is a number')
+    rownames(df) = df[,col]
+    df = df[,-col]
+  } else {
+    # print('it is a string')
+    rownames(df) = df[,which(names(df) %in% c(col))]
+    df = df[,-which(names(df) %in% c(col))]
+  }
+  return(df)
+} 
+
+# function to get colors from a palatte
+getcol = function(group,pal = "Darjeeling1",shift_col_palatte=0){
+  groupcol = as.numeric(factor(group))
+  groupcol = wes_palette(pal)[groupcol+shift_col_palatte]
+  return(groupcol)
+}
+
+
+# Volcano plot
+plot_de_volcano_scatter3 = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Volcano plot',
+                                    axislim,leftarrowlim,rightarrowlim) {
+  # calculate log10 q value. 
+  df$qval_log10 = -log10(df$`adj.P.Val`)
+  # generate summary statistics to show on caption
+  minFDR <- -log10(maxq)
+  sigs <- df$qval_log10 >= minFDR & abs(df$logFC) >= minLFC
+  sigLowFC <- df$qval_log10 >= minFDR & abs(df$logFC) < minLFC
+  
+  cnt_plus <- sum(df$qval_log10 >= minFDR & df$logFC >= minLFC)
+  cnt_neg <- sum(df$qval_log10 >= minFDR & df$logFC <= -minLFC)
+  if(showsub) {
+    subtitle <- paste0(sum(sigs), " DEGs: ", cnt_plus, " + and ", cnt_neg, " -",
+                       " (q<", maxq, ", log2FC>", minLFC, ")")
+  } else {
+    subtitle <- NULL
+  }
+  
+  p1 = ggplot(df) +
+    geom_point(aes(x=logFC, y=qval_log10, color = logFC, size = qval_log10)) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(desc(logFC)) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(desc(logFC)) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "left"
+    ) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(logFC) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(logFC) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "right"
+    ) + 
+    scale_color_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                          values = seq(0, 1, 0.2)) +
+    scale_fill_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                         values = seq(0, 1, 0.2)) +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 FC") + ylab("-log10 q value") +
+    labs(color = 'log2 FC', size = '-log10 q') +
+    theme(panel.grid = element_blank(),
+          legend.background = element_roundrect(color = "#808080", linetype = 1),
+          axis.text = element_text(size = 13, color = "#000000"),
+          axis.title = element_text(size = 15),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5)) + 
+    geom_vline(xintercept=minLFC, linetype=2) + 
+    geom_vline(xintercept=-minLFC, linetype=2) + 
+    geom_hline(yintercept=minFDR, linetype=4) +
+    coord_cartesian(clip = "off") + 
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "first"),
+        gp = grid::gpar(lwd = 3, col = "#74add1")
+      ), 
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Down",
+        gp = grid::gpar(col = "#74add1")
+      ),
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "last"),
+        gp = grid::gpar(lwd = 3, col = "#d73027")
+      ), 
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Up",
+        gp = grid::gpar(col = "#d73027")
+      ),
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) 
+  if (length(axislim) == 4) {
+    p1 = p1 + xlim(axislim[1], axislim[2]) + ylim(axislim[3], axislim[4])
+  }
+  return(p1)
+}
+```
+
+## Load seurat object
+
+
+```{r load pbmc, eval=T}
+pbmc = readRDS('srt.obj.merged.clusterCuratedRefined.classifiedSet.myeloidInfoAdded.metadataIdentifierAdded.RDS')
+pbmc.copy1 <- pbmc
+#pbmc.copy1 -> pbmc
+pbmc.metadata = pbmc@meta.data
+# pbmc.mld2 = readRDS('pbmc.mld2.SexAgeAdded.RDS')
+# pbmc.mld2.copy1 <- pbmc.mld2
+#pbmc.mld2.copy1 -> pbmc.mld2
+```
+
+## The number of B and T cells in GEX data
+
+```{r bt cell count}
+btcellN = as.data.frame(table(pbmc@meta.data$orig.ident,pbmc@meta.data$curated_clusters4))
+btcellN = subset(btcellN,Var2 %in% c('B memory','B Naive', 'Plasmablast B', 
+                                     'CD4 T Memory',  'CD4 T Naive',
+                                     'CD8 T Memory',  'CD8 T Naive',
+                                      'gdT', 'MAIT'))
+
+btcellN$CellType = ifelse(btcellN$Var2 %in% c('CD4 T Memory',  'CD4 T Naive',
+                                     'CD8 T Memory',  'CD8 T Naive',
+                                      'gdT', 'MAIT'), 'T cells',
+                          ifelse(btcellN$Var2 %in% c('B memory','B Naive', 'Plasmablast B'), 'B cells','NA'))
+
+btcellN.sum <- btcellN %>%
+    group_by(Var1,CellType) %>%
+    summarise(CellCount=sum(Freq))
+
+create_dt(btcellN.sum,'The number of B and T cells in each sample')
+```
+
+## Load VDJ data
+
+```{r load vdj,eval=FALSE}
+# vdj b Immcantation reprocessed files
+file_path = '/data/NCBR/projects/NCBR-323/Immcantation'
+
+# read in the data
+# specify the data types of non AIRR-C standard fields
+# we assign integer type to the *_length fields
+sampleList = c('VKM', 'JG', 'MMA', 'HMM', 'NYP', 'GPG', 'FYJ', 'VR', 'SRN')
+bcr_data.merged = NULL
+for (i in sampleList){
+  bcr_data <- airr::read_rearrangement(file.path(file_path, paste0(i,"_BCR_data_sequences_igblast_db-pass.tsv_db-pass.tsv")),
+                                     aux_types=c("v_germline_length"="i",
+                                                 "d_germline_length"="i",
+                                                 "j_germline_length"="i"))
+  bcr_data$sample = i
+  bcr_data.merged = bind_rows(bcr_data.merged,bcr_data)
+}
+
+bcr_data <- bcr_data.merged
+bcr_data$cell_id_unique = paste0(bcr_data$sample,"_",bcr_data$cell_id)
+
+saveRDS(bcr_data,'immdata.B.immcantation.rds')
+
+```
+
+```{r read vdj rds}
+bcr_data = readRDS('immdata.B.immcantation.rds')
+bcr_data.copy1 = bcr_data
+```
+
+## Metadata
+
+```{r parse meta}
+bcr_data$group = ifelse(bcr_data$sample %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+```
+
+# B cell VDJ analysis
+
+## Preprocess BCR data to remove:
+
+1. non-productive sequences
+
+2. cells with multiple heavy chains
+
+3. cells without heavy chains
+
+```{r a1}
+cat(paste("There are", nrow(bcr_data), "rows in the data before removing non-productive sequences.\n"))
+# Remove non-productive sequences
+bcr_data <- bcr_data %>% dplyr::filter(productive)
+cat(paste("There are", nrow(bcr_data), "rows in the data after removing non-productive sequences.\n"))
+
+# remove cells with multiple heavy chains
+multi_heavy <- table(dplyr::filter(bcr_data, locus == "IGH")$cell_id_unique)
+multi_heavy_cells <- names(multi_heavy)[multi_heavy > 1]
+bcr_data <- dplyr::filter(bcr_data, !cell_id_unique %in% multi_heavy_cells)
+cat(paste("There are", nrow(bcr_data),
+          "rows in the data after filtering out cells with multiple heavy chains.\n"))
+
+# Remove cells without heavy chains
+# split cells by heavy and light chains
+heavy_cells <- dplyr::filter(bcr_data, locus == "IGH")$cell_id_unique
+light_cells <- dplyr::filter(bcr_data, locus == "IGK" | locus == "IGL")$cell_id_unique
+no_heavy_cells <- light_cells[which(!light_cells %in% heavy_cells)]
+
+bcr_data <- dplyr::filter(bcr_data, !cell_id_unique %in% no_heavy_cells)
+cat(paste("There are", nrow(bcr_data), "rows in the data after filtering out
+          cells without heavy chains."))
+```
+
+## Match cells between GEX and BCR data
+
+```{r match}
+#head(pbmc.metadata$Row.names)
+#head(bcr_data$cell_id_unique)
+# length(intersect(pbmc.metadata$Row.names,bcr_data$cell_id_unique))/length(unique(bcr_data$cell_id_unique))
+bcr_GEX_VDJ_sharedCells = intersect(pbmc.metadata$Row.names,bcr_data$cell_id_unique)
+#subset BCR to the cells appeared in both GEX and VDJ sets
+bcr_data = subset(bcr_data,cell_id_unique %in% bcr_GEX_VDJ_sharedCells)
+#merge cell annotation/grouping information from the GEX metadata
+bcr_data = merge(bcr_data, select(pbmc.metadata,c(Row.names,trisomy,curated_clusters4,curated_clusters4_trisomy,curated_clusters4_group,curated_clusters4_group_trisomy)),
+                 all.x = T,
+                 by.x = 'cell_id_unique', by.y = 'Row.names')
+cat(paste("There are", nrow(bcr_data), "rows in the data after matching with GEX data."))
+cat(paste("There are", length(unique(bcr_data$cell_id_unique)), "VDJ-GEX shared cells across all samples."))
+```
+
+
+## Identify clonal threshold
+
+We don't observe bimodal distribution from any of the samples, and therefore the prediction of clonal cutoff threshold failed.
+
+Here I just use threshold = 0.1 for all samples. Most of the clonal lineages will only have one clonetype.
+
+```{r clonal threshold}
+# calculate cross subjects distribution of distance to nearest
+dist_cross <- distToNearest(dplyr::filter(bcr_data, locus == "IGH"),
+                                nproc = 1, cross = "sample")
+
+ggplot(subset(dist_cross, !is.na(cross_dist_nearest)), 
+             aes(x=cross_dist_nearest)) + 
+    theme_bw() + 
+    xlab("Cross-sample Hamming distance") + 
+    ylab("Count") +
+  labs(title = "Nearest-neighbor distance distribution",
+       subtitle = "arbitrary cutoff = 0.1") +
+    geom_histogram(color="white", binwidth=0.02) +
+    geom_vline(xintercept=0.1, color="firebrick", linetype=2) +
+    facet_grid(sample ~ ., scales="free_y")
+
+```
+
+
+```{r temp}
+# calculate distribution of distance to nearest for each subject individually
+sampleList = unique(bcr_data$sample)
+for (i in sampleList){
+  print(i)
+  dist_ham <- distToNearest(dplyr::filter(dist_cross, locus == "IGH",
+                                            sample == i), )
+  output <- findThreshold(dist_ham$dist_nearest, method="density")
+  threshold <- output@threshold
+  
+  g = ggplot(subset(dist_ham, !is.na(dist_nearest)),aes(x=dist_nearest,
+   y = ..density..)) + 
+     theme_bw() + 
+     xlab("Hamming distance") + 
+     ylab("Count") +
+     scale_x_continuous(breaks=seq(0, 1, 0.1)) +
+     geom_histogram(color="white", binwidth=0.02) +
+     ggtitle(paste(i,"| predicted threshold:",threshold))+
+     geom_histogram(
+       aes(x=cross_dist_nearest,y = -..density..),
+       color="white", binwidth=0.02,fill="black")+
+     xlim(0,max(filter(dist_cross,
+       !is.na(cross_dist_nearest))$cross_dist_nearest))+
+     geom_vline(xintercept=0.1,color="grey")
+   if(!is.na(threshold)){
+       g = g + geom_vline(xintercept=threshold, color="firebrick", linetype=2)
+   }
+  print(g)
+
+}
+```
+
+## Define clonal groups
+
+
+hierarchicalClones clusters B receptor sequences based on junction region sequence similarity within partitions that share the same V gene, J gene, and junction length, thus allowing for ambiguous V or J gene annotations. By setting it up the cell_id parameter, hierarchicalClones will run in single-cell mode with paired-chain sequences. With only_heavy = TRUE and split_light = TRUE, grouping should be done by using IGH only and inferred clones should be split by the light/short chain (IGK and IGL) following heavy/long chain clustering.
+
+
+```{r define clonal types}
+clones = bcr_data %>%
+    group_by(sample) %>%
+    do(as.data.frame(
+    hierarchicalClones(., 
+                       threshold = 0.1, 
+                       cell_id = "cell_id_unique", 
+                       locus = "locus", #default
+                       only_heavy = FALSE, 
+                       split_light = TRUE, #default
+                       cdr3 = TRUE, 
+                       nproc = 16,
+                       verbose = T, 
+                       log = NULL, #default
+                       summarize_clones = TRUE))) #default
+
+clones$clone_id = paste0(clones$sample,"-",clones$clone_id)
+
+```
+
+## Create germlines
+
+```{r create germlines}
+file_path = '/data/NCBR/projects/NCBR-323/Immcantation'
+references <- readIMGT(dir = paste0(file_path,"/human/vdj"))
+
+clones_germline = createGermlines(clones,references,nproc = 16,verbose = T)
+```
+
+## Calculate V gene SHM frequency
+
+```{r cal v shm}
+# this is typically only done on heavy chains
+results_heavy <- dplyr::filter(clones_germline, locus == "IGH")
+
+# calculate SHM frequency in the V gene
+data_mut <- shazam::observedMutations(results_heavy,
+                              sequenceColumn = "sequence_alignment",
+                              germlineColumn = "germline_alignment_d_mask",
+                              regionDefinition = IMGT_V,
+                              frequency = TRUE,
+                              combine = TRUE,
+                              nproc = 16)
+
+
+```
+
+### Distribution of median mutation frequency of clones
+
+
+```{r dis med mut freq clones}
+# calculate the median mutation frequency of a clone
+mut_freq_clone <- data_mut %>%
+                    dplyr::group_by(clone_id) %>%
+                    dplyr::summarize(median_mut_freq = median(mu_freq))
+
+ggplot(mut_freq_clone, aes(median_mut_freq)) +
+  geom_histogram(binwidth = 0.005) +
+  theme_bw() + theme(axis.title = element_text(size = 18))
+
+```
+
+### Distribution of mutation frequency of cells
+
+#### All B cells
+
+```{r dist mut freq by samples}
+ggboxplot(data_mut, x = "sample", y = "mu_freq",
+                     add = "jitter",  # Add jittered points
+                     ylab = "Mutation frequency", xlab = "Sample",
+                     caption = "All B cells in BCR VDJ data")
+ggboxplot(data_mut, x = "group", y = "mu_freq",
+                     add = "jitter",  # Add jittered points
+                     ylab = "Mutation frequency", xlab = "Group",
+                     caption = "All B cells in BCR VDJ data") +
+  stat_compare_means(method = "wilcox.test")
+
+```
+
+
+#### Memory B cells
+
+```{r dist mut freq by samples mem}
+data_mut.Bmemory = subset(data_mut,curated_clusters4 == 'B memory')
+caption = "B memory cells annotated by GEX data"
+tmp = data_mut.Bmemory
+
+ggboxplot(tmp, x = "sample", y = "mu_freq",
+                     add = "jitter",  # Add jittered points
+                     ylab = "Mutation frequency", xlab = "Sample",
+                     caption = caption)
+ggboxplot(tmp, x = "group", y = "mu_freq",
+                     add = "jitter",  # Add jittered points
+                     ylab = "Mutation frequency", xlab = "Group",
+                     caption = caption) +
+  stat_compare_means(method = "wilcox.test")
+
+
+data_mut.Bmemory.summary <- data_mut.Bmemory %>%
+  group_by(curated_clusters4, sample) %>%
+  summarise(
+    mean_mu_freq = mean(mu_freq),
+    sd_mu_freq = sd(mu_freq)
+  )
+
+create_dt(data_mut.Bmemory.summary,'Mean and standard deviation of mutation frequency of B memory cells of each sample')
+
+write.csv(data_mut.Bmemory.summary,'data_mut.Bmemory.summary.session29.csv')
+
+```
+

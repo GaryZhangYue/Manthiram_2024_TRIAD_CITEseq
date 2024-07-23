@@ -1,0 +1,571 @@
+---
+title: "Trisomy/Disomy cell frequency analysis"
+date: "`r Sys.Date()`"
+author: Yue (Gary) Zhang, PhD
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Preparation
+
+## Load packages and set variables
+
+```{r Initiate, results='hide'}
+## initiate ---------------------------------------------------------
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+    "dplyr",
+    "Seurat",
+    "patchwork",
+    "ggplot2",
+    "ggrepel",
+    "readxl",
+    "future",
+    "cowplot",
+    "Azimuth",
+    "dsb",
+    "corrplot",
+    "DT",
+    "tidyr",
+    "ggpubr",
+    "scRNAtoolVis"
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+    lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+## Customized functions
+
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+# remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+# calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+df$p_val_adj_log10 = -log10(df$p_val_adj)
+df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+# generate summary statistics to show on caption
+minFDR <- -log10(maxq)
+sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+
+cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+if(showsub) {
+  subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                     " (FDR<", maxq, ", log2FC>", minLFC, ")")
+} else {
+  subtitle <- NULL
+}
+
+p1 = ggplot(df) +
+  geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+  geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+  geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+  facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+
+df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+  geom_point() +
+  facet_wrap(~ Celltype_tested, scales = 'free') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+return(list(p1,p2))
+}
+
+create_dt <- function(df,caption){
+  datatable(df,
+                caption = caption,
+                extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                               buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                               lengthMenu = list(c(10,25,50,-1),
+                                                 c(10,25,50,"All"))))
+}
+  
+```
+
+## Load seurat object
+
+load srt.obj.merged.clusterCurated.RDS
+
+```{r load pbmc}
+pbmc = readRDS('srt.obj.merged.clusterCuratedRefined.classifiedSet.RDS')
+pbmc.copy1 <- pbmc
+#pbmc.copy1 -> pbmc
+```
+
+## Attach trisomy/normal celltyping information
+
+```{r attach trisomy-normal info, results='hide'}
+tsct = read.csv('Trisomy-Annotation-Shouguo-May-2023.merged.csv')
+# parse celll barcode to match metadata
+tsct$cell = sub('sample','',tsct$cell)
+# most of cell barcodes have "normal" as prefix; they should be redundant info; remove them
+tsct = subset(tsct,!grepl(pattern = 'normal',x = tsct$cell))
+# Check how many cell barcodes share between seurat and tsct 
+length(intersect(rownames(pbmc@meta.data),tsct$cell)) # 55693
+nrow(pbmc@meta.data) # 83107
+# merge tsct with metadata
+pbmc@meta.data = merge(pbmc@meta.data,select(tsct,c(cell,RatioChr8,trisomy)),
+                 by.x = 0, by.y = 'cell', all.x = T)
+# sanity check
+nrow(pbmc@meta.data[complete.cases(pbmc@meta.data$trisomy),]) # 55693; as same as the number of shared cells between sheets above
+rownames(pbmc@meta.data) = pbmc@meta.data$Row.names
+#pbmc@meta.data = select(pbmc@meta.data, -c(RatioChr8.x,trisomy.x,RatioChr8.y,trisomy.y))
+
+```
+
+# Trisomy/Normal Celltyping Analysis (All Cells)
+
+## Trisomy/Normal for each patient (without cell cluster annotation)
+
+### Summary statistics chart
+
+```{r ct, results='hide'}
+tsct.summary = cluster_freq(pbmc,'orig.ident','trisomy')
+tsct.summary$trisomy[is.na(tsct.summary$trisomy)] = 'NA in Trisomy annotation'
+sum(tsct.summary$count) # 83107
+sum(tsct.summary$count[tsct.summary$trisomy != 'NA in Trisomy annotation']) # 55693; match to the value above
+# write.csv(tsct.summary, 'tsct.summary.csv')
+```
+
+```{r show table}
+create_dt(tsct.summary,caption = 'Trisomy vs Normal per Patient')
+```
+
+### Stacked barplots: the number of cells annotated
+
+```{r cell typing count}
+ggplot(data = tsct.summary, mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Cell Count') +
+  guides(fill=guide_legend(nrow=2))
+  
+```
+
+### Stacked barplots: the frequency of cells annotated
+
+```{r plot frequency}
+ggplot(data = tsct.summary, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = trisomy)) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Celltyping Frequency') +
+  guides(fill=guide_legend(nrow=2))
+```
+
+
+## Trisomy/Normal in each cell cluster
+
+### Summary statistics chart
+
+```{r analyze cell typing by clusters, results='hide'}
+pbmc@meta.data %>%
+    group_by(orig.ident, curated_clusters4, trisomy) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequenc = count/sum(count)) -> tsct.summary2
+tsct.summary2$trisomy[is.na(tsct.summary2$trisomy)] = 'NA in Trisomy annotation'
+# write.csv(tsct.summary2, 'tsct.summary2.csv')
+sum(tsct.summary2$count) # 83107
+sum(tsct.summary2$count[tsct.summary2$trisomy != 'NA in Trisomy annotation']) # 55693; match to the value above
+sum(tsct.summary2$count[tsct.summary2$orig.ident == 'GPG']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='GPG',]) # matched
+tsct.summary3 <- pivot_wider(select(tsct.summary2, - relative_frequenc), names_from = trisomy, values_from = count, values_fill = 0) %>%
+  subset(!(orig.ident %in% c('FYJ', 'SRN', 'VR')))
+```
+
+```{r freq cl}
+create_dt(tsct.summary3,caption = 'Trisomy vs Normal in each cell cluster per Patient')
+```
+
+### Stacked barplots: the number of cells annotated in each cluster
+
+Trisomy vs Normal; gray and unannotated cells included
+
+```{r cn by cluster, fig.width=15}
+ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = curated_clusters4, y = `count`,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Cell Count') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal', subtitle = 'Gray and unannotated cells included')
+```
+
+### Stacked barplots: the frequency of cells annotated in each cluster
+
+Trisomy vs Normal; gray and unannotated cells included
+
+```{r freq by cluster, fig.width=15}
+ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = curated_clusters4, y = `relative_frequenc`,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal', subtitle = 'Gray and unannotated cells included')
+```
+
+Trisomy vs Normal; gray and unannotated cells excluded
+```{r freq by cluster2, fig.width=15}
+ggplot(data = tsct.summary2 %>%
+         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = curated_clusters4, y = `count`,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black',position = 'fill') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal', subtitle = 'Gray and unannotated cells excluded')
+```
+
+Trisomy vs Normal; gray and unannotated cells excluded; grouped by cell clusters
+
+```{r freq by cluster3, fig.width=15}
+ggplot(data = tsct.summary2 %>%
+         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
+  facet_grid(.~curated_clusters4) +
+  geom_bar(stat="identity",color = 'black',position = 'fill') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 9, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+    xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal', subtitle = 'Gray and unannotated cells excluded; grouped by cell clusters')
+
+```
+
+### Barplot: The average of the trisomy cell percentage for each cell cluster
+
+Here we calculate the average and standard deviation of the percentage of trisomy cells (trisomy/trisomy+normal) across all patients for each cell cluster.
+
+```{r freq avg}
+tsct.summary4 = tsct.summary2 %>%
+  subset(trisomy == 'TRISOMY', select = c(curated_clusters4,relative_frequenc)) %>%
+  group_by(curated_clusters4) %>%
+  summarize(
+    average_frequency = mean(relative_frequenc),
+    std_frequency = sd(relative_frequenc)
+  )
+
+# No Trisomy cells in Plasmablast B cells at all, so let's manually add it as 0 in the table for plotting
+tsct.summary4 = rbind(tsct.summary4, c('Plasmablast B', 0,0))
+tsct.summary4$average_frequency = as.numeric(tsct.summary4$average_frequency)
+tsct.summary4$std_frequency = as.numeric(tsct.summary4$std_frequency)
+
+tsct.summary4$curated_clusters4 = factor(tsct.summary4$curated_clusters4,c( "CD14 Mono", 
+                                                                            "CD16 Mono",  
+                                                                            "cDC", 
+                                                                            "pDC", 
+                                                                            "B Naive", 
+                                                                            "B memory",
+                                                                            'Plasmablast B',
+                                                                           "CD4 T Naive", "CD4 T Memory",
+                                                                           "CD8 T Naive", "CD8 T Memory",
+                                                                            "NK", 
+                                                                           "MAIT","gdT"))
+ggplot(tsct.summary4, aes(x = curated_clusters4, y = average_frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_errorbar(aes(ymin = average_frequency - std_frequency,
+                    ymax = average_frequency + std_frequency),
+                width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "The fraction of trisomy cells in cell clusters across all patients",
+       x = "Cell clusters",
+       y = "Fraction of Trisomy cells") +
+theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=12,face="bold"))
+
+```
+
+# Trisomy/Normal Celltyping Analysis (Myeloid Cells)
+
+## Preprocessing
+
+Load the seurat object of re-clustered myeloid cells generated in Session 14 (pbmc.mld2.RDS).
+Merge the myeloid cell subcluster index to metadata.
+
+```{r load pbmcmld2, results='hide'}
+pbmc.mld2 = readRDS('pbmc.mld2.RDS')
+pbmc.mld2.copy1 <- pbmc.mld2
+#pbmc.mld2.copy1 -> pbmc.mld2
+pbmc.mld2@meta.data %>%
+  as.data.frame() %>%
+  select(myeloid_Clusters) %>%
+  merge(pbmc@meta.data,.,
+                 by = 0, all.x = T) -> temp
+nrow(temp) # 83107; as same as above
+nrow(subset(temp,!is.na(myeloid_Clusters))) == nrow(pbmc.mld2@meta.data) # TRUE; it is 20910 cell; merging is successful
+all(temp[,1] == temp[,2])
+pbmc@meta.data <- temp[,-2] # remove the redundant column
+rownames(pbmc@meta.data) = pbmc@meta.data$Row.name
+```
+
+
+## Summary statistics chart
+
+```{r analyze cell typing by clusters mld, results='hide'}
+pbmc@meta.data %>%
+    group_by(orig.ident, myeloid_Clusters, trisomy) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequenc = count/sum(count)) -> tsct.mld.summary2
+tsct.mld.summary2$trisomy[is.na(tsct.mld.summary2$trisomy)] = 'NA in Trisomy annotation'
+# write.csv(tsct.mld.summary2, 'tsct.mld.summary2.csv')
+sum(tsct.mld.summary2$count) # 83107
+sum(tsct.mld.summary2$count[tsct.mld.summary2$trisomy != 'NA in Trisomy annotation']) # 55693; match to the value above
+sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'GPG']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='GPG',]) # matched
+sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'GPG' & !(is.na(tsct.mld.summary2$myeloid_Clusters))]) == nrow(pbmc.mld2@meta.data[pbmc.mld2@meta.data$orig.ident=='GPG',]) # matched
+tsct.mld.summary3 <- pivot_wider(select(tsct.mld.summary2, - relative_frequenc), names_from = trisomy, values_from = count, values_fill = 0) %>%
+  subset(!(orig.ident %in% c('FYJ', 'SRN', 'VR')))
+```
+
+```{r freq cl mld}
+create_dt(tsct.mld.summary3,caption = 'Trisomy vs Normal in each myeloid cell subcluster per Patient')
+```
+
+## Stacked barplots: the number of cells annotated in each cluster
+
+Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells included
+```{r frequency by cluster mld, fig.width=15}
+# filter out information with myeloid cell sub-clusters
+tsct.mld.summary2 = tsct.mld.summary2[complete.cases(tsct.mld.summary2$myeloid_Clusters),] 
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = myeloid_Clusters, y = `count`,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Cell Count') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal in Myeloid Cell Subclusters', subtitle = 'Gray and unannotated cells included')
+```
+
+Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells included; grouped by cell clusters
+
+```{r frequency by cluster mld 2, fig.width=15}
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
+  facet_grid(.~myeloid_Clusters) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Cell Count') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal in Myeloid Cell Subclusters', subtitle = 'Gray and unannotated cells included; grouped by cell clusters')
+```
+
+## Stacked barplots: the frequency of cells annotated in each cluster
+
+Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells included
+
+```{r frequency by cluster mld 3, fig.width=15}
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = myeloid_Clusters, y = `relative_frequenc`,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal in Myeloid Cell Subclusters', subtitle = 'Gray and unannotated cells included')
+```
+
+Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells excluded
+
+```{r frequency by cluster mld2 4, fig.width=15}
+ggplot(data = tsct.mld.summary2 %>%
+         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(trisomy %in% c('NORMAL','TRISOMY')), mapping = aes(x = myeloid_Clusters, y = count,fill = trisomy)) +
+  facet_grid(.~orig.ident) +
+  geom_bar(stat="identity",color = 'black',position = 'fill') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 15, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal in Myeloid Cell Subclusters', subtitle = 'Gray and unannotated cells excluded')
+```
+
+Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells excluded; grouped by cell clusters
+
+```{r frequency by cluster mld 5, fig.width=15}
+ggplot(data = tsct.mld.summary2 %>%
+         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
+  facet_grid(.~myeloid_Clusters) +
+  geom_bar(stat="identity",color = 'black',position = 'fill') +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom',
+        legend.text = element_text(size = 12),
+        legend.key.size = unit(0.3,'cm'),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=18,face="bold"),
+        strip.text.x = element_text(size = 9, color = "black", face = "bold"),
+        strip.text.y = element_text(size = 15, color = "black", face = "bold"),
+        strip.background = element_rect(color="black", fill="grey95", size=1.5, linetype="solid"))+
+  xlab("Subject") + ylab('Frequency') +
+  guides(fill=guide_legend(nrow=2)) + ggtitle('Trisomy vs Normal in Myeloid Cell Subclusters', subtitle = 'Gray and unannotated cells excluded; grouped by cell clusters')
+
+```
+
+## Barplot: The average of the trisomy cell percentage in myeloid cell subclusters
+
+Here we calculate the average and standard deviation of the percentage of trisomy cells (trisomy/trisomy+normal) across all patients for each myeloid cell subcluster.
+
+```{r freq mld avg}
+tsct.mld.summary4 = tsct.mld.summary2 %>%
+  subset(trisomy == 'TRISOMY', select = c(myeloid_Clusters,relative_frequenc)) %>%
+  group_by(myeloid_Clusters) %>%
+  summarize(
+    average_frequency = mean(relative_frequenc),
+    std_frequency = sd(relative_frequenc)
+  )
+
+ggplot(tsct.mld.summary4, aes(x = myeloid_Clusters, y = average_frequency)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_errorbar(aes(ymin = average_frequency - std_frequency,
+                    ymax = average_frequency + std_frequency),
+                width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "The fraction of trisomy cells in myeloid cell subclusters across all patients",
+       x = "Myeloid cell subclusters",
+       y = "Trisomy/Normal cell counts") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=10, face = 'bold', color = 'black'),
+        axis.text.y = element_text(size=15, face = 'bold', color = 'black'),
+        axis.title=element_text(size=12,face="bold"))
+
+```
+
+## Save the seurat object as .rds files
+```{r save}
+saveRDS(pbmc,'srt.obj.merged.clusterCuratedRefined.classifiedSet.myeloidInfoAdded.RDS')
+```

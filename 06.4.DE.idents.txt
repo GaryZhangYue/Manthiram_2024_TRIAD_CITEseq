@@ -1,0 +1,37 @@
+CD8 T Naive-trisomy8-TRISOMY	CD8 T Naive-control-NA
+CD4 T Naive-trisomy8-TRISOMY	CD4 T Naive-control-NA
+NK-trisomy8-TRISOMY	NK-control-NA
+CD4 T Memory-trisomy8-TRISOMY	CD4 T Memory-control-NA
+pDC-trisomy8-TRISOMY	pDC-control-NA
+gdT-trisomy8-TRISOMY	gdT-control-NA
+CD8 T Memory-trisomy8-TRISOMY	CD8 T Memory-control-NA
+B Naive-trisomy8-TRISOMY	B Naive-control-NA
+CD14 Mono-trisomy8-TRISOMY	CD14 Mono-control-NA
+B memory-trisomy8-TRISOMY	B memory-control-NA
+CD16 Mono-trisomy8-TRISOMY	CD16 Mono-control-NA
+MAIT-trisomy8-TRISOMY	MAIT-control-NA
+cDC-trisomy8-TRISOMY	cDC-control-NA
+CD8 T Naive-trisomy8-NORMAL	CD8 T Naive-control-NA
+CD4 T Naive-trisomy8-NORMAL	CD4 T Naive-control-NA
+NK-trisomy8-NORMAL	NK-control-NA
+CD4 T Memory-trisomy8-NORMAL	CD4 T Memory-control-NA
+pDC-trisomy8-NORMAL	pDC-control-NA
+gdT-trisomy8-NORMAL	gdT-control-NA
+CD8 T Memory-trisomy8-NORMAL	CD8 T Memory-control-NA
+B Naive-trisomy8-NORMAL	B Naive-control-NA
+CD14 Mono-trisomy8-NORMAL	CD14 Mono-control-NA
+B memory-trisomy8-NORMAL	B memory-control-NA
+CD16 Mono-trisomy8-NORMAL	CD16 Mono-control-NA
+MAIT-trisomy8-NORMAL	MAIT-control-NA
+CD8 T Naive-trisomy8-TRISOMY	CD8 T Naive-trisomy8-NORMAL
+CD4 T Naive-trisomy8-TRISOMY	CD4 T Naive-trisomy8-NORMAL
+NK-trisomy8-TRISOMY	NK-trisomy8-NORMAL
+CD4 T Memory-trisomy8-TRISOMY	CD4 T Memory-trisomy8-NORMAL
+pDC-trisomy8-TRISOMY	pDC-trisomy8-NORMAL
+gdT-trisomy8-TRISOMY	gdT-trisomy8-NORMAL
+CD8 T Memory-trisomy8-TRISOMY	CD8 T Memory-trisomy8-NORMAL
+B Naive-trisomy8-TRISOMY	B Naive-trisomy8-NORMAL
+CD14 Mono-trisomy8-TRISOMY	CD14 Mono-trisomy8-NORMAL
+B memory-trisomy8-TRISOMY	B memory-trisomy8-NORMAL
+CD16 Mono-trisomy8-TRISOMY	CD16 Mono-trisomy8-NORMAL
+MAIT-trisomy8-TRISOMY	MAIT-trisomy8-NORMAL

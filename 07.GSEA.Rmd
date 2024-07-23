@@ -1,0 +1,375 @@
+---
+title: "DEG (MAST) and GSEA analysis"
+date: "`r Sys.Date()`"
+author: Yue (Gary) Zhang, PhD
+output:
+  rmdformats::readthedown:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: false
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Preparation
+
+## Load packages and set variables
+
+```{r Initiate, results='hide'}
+## initiate ---------------------------------------------------------
+# use the following line to set the library path to /data/zhangy68/R/4.3;
+# this path is writtable and used by R in sinteractive mode
+# this line is nessacery if running interactive web-based Rstudio
+.libPaths('/data/zhangy68/R/4.3')
+
+packages_to_load = c(
+    "dplyr",
+    "Seurat",
+    "patchwork",
+    "ggplot2",
+    "ggrepel",
+    "readxl",
+    "future",
+    "cowplot",
+    "Azimuth",
+    "dsb",
+    "corrplot",
+    "DT",
+    "tidyr",
+    "ggpubr",
+    "scRNAtoolVis",
+    "purrr",
+    "limma",
+    "wesanderson",
+    "reshape",
+    "edgeR",
+    'ggfun',
+    'ggrepel',
+    'fgsea'
+)
+# Load packages without printing output
+invisible(suppressPackageStartupMessages({
+    lapply(packages_to_load, library, character.only = TRUE)
+}))
+
+# set variables 
+setwd('./')
+set.seed('123')
+col21 <- rev(c("tomato1","darkblue","turquoise1","lightblue","darkred","mediumblue","purple","bisque",
+               "greenyellow","yellow","violetred2","darkgreen","darkgoldenrod1","deeppink3","cadetblue4",
+               "orchid2","seagreen3","purple4","dodgerblue2","red","gray27"))
+
+```
+
+## Customized functions
+
+```{r function section}
+# create a function to generate cluster frequency tables
+cluster_freq = function(pbmc,orig.ident,cluster){
+  freq <- pbmc@meta.data %>%
+    group_by(!!sym(orig.ident), !!sym(cluster)) %>%
+    summarise(count=n()) %>%
+    mutate(relative_frequency = count/sum(count))
+  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  return(freq)
+}
+# custom function to plot DE genes between Trisomy and Normal by clusters
+plot_de_volcano_scatter = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Trisomy vs Normal') {
+# remove everything after "..." in gene names; bind_rows automatically added these to avoid duplicate rownames.
+df$genes = sub(pattern = '\\.\\.\\.*', replacement = '',x = rownames(df))
+# calculate log10 q value. cap log10 q value at 5 (which is 0.00001 in q val)
+df$p_val_adj_log10 = -log10(df$p_val_adj)
+df$p_val_adj_log10_capped = ifelse(df$p_val_adj_log10 < 5, df$p_val_adj_log10, 5)
+# generate summary statistics to show on caption
+minFDR <- -log10(maxq)
+sigs <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) >= minLFC
+sigLowFC <- df$p_val_adj_log10 >= minFDR & abs(df$avg_log2FC) < minLFC
+
+cnt_plus <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC >= minLFC)
+cnt_neg <- sum(df$p_val_adj_log10 >= minFDR & df$avg_log2FC <= -minLFC)
+if(showsub) {
+  subtitle <- paste0(sum(sigs), " DE genes: ", cnt_plus, " Pos and ", cnt_neg, " Neg",
+                     " (FDR<", maxq, ", log2FC>", minLFC, ")")
+} else {
+  subtitle <- NULL
+}
+
+p1 = ggplot(df) +
+  geom_point(aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5) + 
+  geom_point(data=df[sigs,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigcol) +
+  geom_point(data=df[sigLowFC,], aes(x=avg_log2FC, y=p_val_adj_log10_capped), size=0.5, col=sigLowFCcol) +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("log10 FDR") +
+  facet_wrap(.~Celltype_tested,nrow=round(length(unique(df$Celltype_tested))/2))+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5)) + 
+  geom_vline(xintercept=minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_vline(xintercept=-minLFC, col=sigcol, linetype="dashed", size=0.5) + 
+  geom_hline(yintercept=minFDR, col=sigcol, linetype="dashed", size=0.5)
+
+df.s = subset(df, p_val_adj_log10 >minFDR & abs(avg_log2FC) > minLFC)
+df.s = df.s[order(df.s$avg_log2FC, decreasing = TRUE), ]
+df.s$genes = factor(df.s$genes,levels = unique(df.s$genes))
+p2 = ggplot(df.s,mapping = aes(x=genes,y=avg_log2FC,color=p_val_adj_log10_capped)) +
+  geom_point() +
+  facet_wrap(~ Celltype_tested, scales = 'free') +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  coord_flip() +
+  ggtitle(title, subtitle=subtitle) + xlab("log2 Fold Change") + ylab("genes")
+return(list(p1,p2))
+}
+
+create_dt <- function(df,caption){
+  datatable(df,
+                caption = caption,
+                extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                               buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                               lengthMenu = list(c(10,25,50,-1),
+                                                 c(10,25,50,"All"))))
+}
+
+# function to set a column as rownames and remove that column from the df; default is setting the first column as the rowname
+setrowname =  function(df,col = 1){
+  if (is.numeric(col)) {
+    # print('it is a number')
+    rownames(df) = df[,col]
+    df = df[,-col]
+  } else {
+    # print('it is a string')
+    rownames(df) = df[,which(names(df) %in% c(col))]
+    df = df[,-which(names(df) %in% c(col))]
+  }
+  return(df)
+} 
+
+# function to get colors from a palatte
+getcol = function(group,pal = "Darjeeling1",shift_col_palatte=0){
+  groupcol = as.numeric(factor(group))
+  groupcol = wes_palette(pal)[groupcol+shift_col_palatte]
+  return(groupcol)
+}
+
+
+# Volcano plot
+plot_de_volcano_scatter3 = function(df, maxq = 0.1, minLFC=1, showsub = T, sigcol = 'red', sigLowFCcol = 'navyblue', title = 'Volcano plot',
+                                    axislim,leftarrowlim,rightarrowlim) {
+  # calculate log10 q value. 
+  df$qval_log10 = -log10(df$`adj.P.Val`)
+  # generate summary statistics to show on caption
+  minFDR <- -log10(maxq)
+  sigs <- df$qval_log10 >= minFDR & abs(df$logFC) >= minLFC
+  sigLowFC <- df$qval_log10 >= minFDR & abs(df$logFC) < minLFC
+  
+  cnt_plus <- sum(df$qval_log10 >= minFDR & df$logFC >= minLFC)
+  cnt_neg <- sum(df$qval_log10 >= minFDR & df$logFC <= -minLFC)
+  if(showsub) {
+    subtitle <- paste0(sum(sigs), " DEGs: ", cnt_plus, " + and ", cnt_neg, " -",
+                       " (q<", maxq, ", log2FC>", minLFC, ")")
+  } else {
+    subtitle <- NULL
+  }
+  
+  p1 = ggplot(df) +
+    geom_point(aes(x=logFC, y=qval_log10, color = logFC, size = qval_log10)) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(desc(logFC)) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(desc(logFC)) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "left"
+    ) + 
+    geom_point(data =  df %>%
+                 subset(qval_log10 >= minFDR) %>%
+                 dplyr::arrange(logFC) %>%
+                 dplyr::slice(1:5),
+               aes(x = logFC, y = qval_log10,
+                   # fill = log2FoldChange,
+                   size = qval_log10),
+               shape = 21, show.legend = F, color = "#000000") +
+    geom_text_repel(data =  df %>%
+                      subset(qval_log10 >= minFDR) %>%
+                      dplyr::arrange(logFC) %>%
+                      dplyr::slice(1:5),
+                    aes(x = logFC, y = qval_log10,label = geneID),
+                    box.padding = 0.5,
+                    nudge_x = 0.5,
+                    nudge_y = 0.2,
+                    segment.curvature = -0.1,
+                    segment.ncp = 3,
+                    # segment.angle = 10,
+                    direction = "y", 
+                    hjust = "right"
+    ) + 
+    scale_color_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                          values = seq(0, 1, 0.2)) +
+    scale_fill_gradientn(colours = c("#3288bd", "#66c2a5","#ffffbf", "#f46d43", "#9e0142"),
+                         values = seq(0, 1, 0.2)) +
+    ggtitle(title, subtitle=subtitle) + xlab("log2 FC") + ylab("-log10 q value") +
+    labs(color = 'log2 FC', size = '-log10 q') +
+    theme(panel.grid = element_blank(),
+          legend.background = element_roundrect(color = "#808080", linetype = 1),
+          axis.text = element_text(size = 13, color = "#000000"),
+          axis.title = element_text(size = 15),
+          plot.title = element_text(hjust = 0.5),
+          plot.subtitle = element_text(hjust = 0.5)) + 
+    geom_vline(xintercept=minLFC, linetype=2) + 
+    geom_vline(xintercept=-minLFC, linetype=2) + 
+    geom_hline(yintercept=minFDR, linetype=4) +
+    coord_cartesian(clip = "off") + 
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "first"),
+        gp = grid::gpar(lwd = 3, col = "#74add1")
+      ), 
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Down",
+        gp = grid::gpar(col = "#74add1")
+      ),
+      xmin = leftarrowlim[1], 
+      xmax = leftarrowlim[2],
+      ymin = leftarrowlim[3],
+      ymax = leftarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::segmentsGrob(
+        y0 = unit(-10, "pt"),
+        y1 = unit(-10, "pt"),
+        arrow = arrow(angle = 45, length = unit(.2, "cm"), ends = "last"),
+        gp = grid::gpar(lwd = 3, col = "#d73027")
+      ), 
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) +
+    annotation_custom(
+      grob = grid::textGrob(
+        label = "Up",
+        gp = grid::gpar(col = "#d73027")
+      ),
+      xmin = rightarrowlim[1], 
+      xmax = rightarrowlim[2],
+      ymin = rightarrowlim[3],
+      ymax = rightarrowlim[4]
+    ) 
+  if (length(axislim) == 4) {
+    p1 = p1 + xlim(axislim[1], axislim[2]) + ylim(axislim[3], axislim[4])
+  }
+  return(p1)
+}
+```
+
+## Load GSEA gene sets (acquired from gsea msigdb)
+
+Load KEGG, Reactome, GO, and Hallmark.
+
+```{r load gsea gs}
+geneSet.kegg = gmtPathways('c2.cp.kegg_medicus.v2023.2.Hs.symbols.gmt')
+geneSet.reactome =gmtPathways('c2.cp.reactome.v2023.2.Hs.symbols.gmt') 
+geneSet.go = gmtPathways('c5.go.bp.v2023.2.Hs.symbols.gmt')
+geneSet.hallmark = gmtPathways('h.all.v2023.2.Hs.symbols.gmt')
+geneSet.merged4 = c(geneSet.kegg,geneSet.reactome,geneSet.go,geneSet.hallmark)
+```
+
+## Load and parse MAST DEG results (sex as covariate)
+
+```{r load deg}
+DEG = read.csv('DEG_MAST.merged.csv')
+DEG= DEG[,-c(1,2)]
+all(gsub('-.*','',DEG$ident.1) == gsub('-.*','',DEG$ident.2)) # sanity check
+DEG$celltype = gsub('-.*','',DEG$ident.1)
+DEG$comparison = ifelse(grepl('trisomy8-NORMAL',DEG$ident.1) & grepl('control-NA',DEG$ident.2), yes = 'T8 disomy VS control',
+                        no = ifelse(grepl('trisomy8-TRISOMY',DEG$ident.1) & grepl('control-NA',DEG$ident.2), yes = 'T8 trisomy VS control',
+                                    no = ifelse(grepl('trisomy8-TRISOMY',DEG$ident.1) & grepl('trisomy8-NORMAL',DEG$ident.2), yes = 'T8 trisomy VS T8 disomy', no = 'NA')))
+DEG$comparison_celltype = paste(DEG$comparison,DEG$celltype,sep = '_in_')
+names(DEG)[1] = 'geneID'
+DEG.sig = subset(DEG, p_val_adj < 0.05)
+table(DEG.sig$comparison,DEG.sig$celltype)
+create_dt(DEG,'DEG list (MAST with covariate sex; all cell types); all Genes without any filtering')
+
+```
+
+# GSEA analysis
+
+```{r fgsea,results='asis',eval=F}
+# function to add comparison and celltype for the loop below
+add_test_details = function(df,geneSetType){
+  df$celltype = unique(DEG.s.r$celltype)
+  df$comparison = unique(DEG.s.r$comparison)
+  df$geneSetType = geneSetType
+  return(df)
+}
+
+DE.GSEA = NULL
+for (ct in unique(DEG$comparison_celltype)) {
+  print(ct)
+  DEG.s = subset(DEG, comparison_celltype == ct)
+  DEG.s.r = DEG.s[order(DEG.s$avg_log2FC,decreasing = T),]
+  print(htmltools::tagList(create_dt(DEG.s.r[1:100,],caption = paste0(ct, ' MAST DEGs ranked by logfc (top 100 genes)'))))
+  DEG.s.r.rank = DEG.s.r$avg_log2FC
+  names(DEG.s.r.rank) = DEG.s.r$geneID
+  
+  # hallmark
+  gsea.hallmark.tmp = fgsea(pathways = geneSet.hallmark,
+                            stats = DEG.s.r.rank,
+                            eps = 0)
+  gsea.hallmark.tmp = add_test_details(gsea.hallmark.tmp,'Hallmark')
+  #assign(paste0('gsea.hallmark',ct),gsea.hallmark.tmp)
+  
+  # kegg
+  gsea.kegg.tmp = fgsea(pathways = geneSet.kegg,
+                        stats = DEG.s.r.rank,
+                        eps = 0)
+  gsea.kegg.tmp = add_test_details(gsea.kegg.tmp,'KEGG')
+  #assign(paste0('gsea.kegg',ct),gsea.kegg.tmp)
+  
+  # reactome
+  gsea.reactome.tmp = fgsea(pathways = geneSet.reactome,
+                            stats = DEG.s.r.rank,
+                            eps = 0)
+  gsea.reactome.tmp = add_test_details(gsea.reactome.tmp,'Reactome')
+  #assign(paste0('gsea.reactome.',ct),gsea.reactome.tmp)
+  
+  # go
+  gsea.go.tmp = fgsea(pathways = geneSet.go,
+                      stats = DEG.s.r.rank,
+                      eps = 0)
+  gsea.go.tmp = add_test_details(gsea.go.tmp,'GO')
+  #assign(paste0('gsea.go',ct),gsea.go.tmp)
+  
+  gsea.tmp = bind_rows(gsea.hallmark.tmp,gsea.kegg.tmp,gsea.reactome.tmp,gsea.go.tmp)
+  DE.GSEA = bind_rows(DE.GSEA,gsea.tmp)
+}
+
+#write.csv(DE.GSEA,"DE.fgsea.csv")
+saveRDS(DE.GSEA,'DE.fgsea.rds')
+```
