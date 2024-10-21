@@ -90,13 +90,13 @@ cluster_freq = function(pbmc,orig.ident,cluster,sex=F){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
   if(sex == T){
     freq$sex = cov$sex[match(freq$orig.ident,cov$sample)]
     freq$group_sex = paste0(freq$group,'_',freq$sex)
     freq$group_sex = factor(freq$group_sex, levels = c('control_F','trisomy8_F','control_M','trisomy8_M'))
   }
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters
@@ -355,7 +355,7 @@ file_path = '/data/NCBR/projects/NCBR-323/Immcantation'
 # read in the data
 # specify the data types of non AIRR-C standard fields
 # we assign integer type to the *_length fields
-sampleList = c('VKM', 'JG', 'MMA', 'HMM', 'NYP', 'GPG', 'FYJ', 'VR', 'SRN')
+sampleList = c('TRIAD-18', 'TRIAD-7', 'TRIAD-2', 'TRIAD-3', 'TRIAD-4', 'TRIAD-1', 'HV-1', 'HV-3', 'HV-2')
 bcr_data.merged = NULL
 for (i in sampleList){
   bcr_data <- airr::read_rearrangement(file.path(file_path, paste0(i,"_BCR_data_sequences_igblast_db-pass.tsv_db-pass.tsv")),
@@ -381,7 +381,7 @@ bcr_data.copy1 = bcr_data
 ## Metadata
 
 ```{r parse meta}
-bcr_data$group = ifelse(bcr_data$sample %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+bcr_data$group = ifelse(bcr_data$sample %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
 ```
 
 # B cell VDJ analysis

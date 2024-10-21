@@ -19,7 +19,7 @@ doublets <-function(dfso){
 }
 
 ## load the h5 dataset -------------
-samplelist = c('FYJ', 'GPG', 'HMM', 'JG', 'MMA', 'NYP', 'SRN', 'VKM', 'VR')
+samplelist = c('HV-1', 'TRIAD-1', 'TRIAD-3', 'TRIAD-7', 'TRIAD-2', 'TRIAD-4', 'HV-2', 'TRIAD-18', 'HV-3')
 
 for (sample in samplelist) {
   print(sample)
@@ -39,7 +39,7 @@ for (sample in samplelist) {
 }
 
 ## Perform QC for each sample
-srt.obj.list = list(FYJ,GPG,HMM,JG,MMA,NYP,SRN,VKM,VR)
+srt.obj.list = list(HV-1,TRIAD-1,TRIAD-3,TRIAD-7,TRIAD-2,TRIAD-4,HV-2,TRIAD-18,HV-3)
 n=1
 for (srt.obj in srt.obj.list) {
   DefaultAssay(srt.obj) <- "RNA"
@@ -92,7 +92,7 @@ for (srt.obj in srt.obj.list) {
 }
 
 ## save output for SCTransform and integration on Biowulf
-srt.obj.list = list(FYJ,GPG,HMM,JG,MMA,NYP,SRN,VKM,VR)
+srt.obj.list = list(HV-1,TRIAD-1,TRIAD-3,TRIAD-7,TRIAD-2,TRIAD-4,HV-2,TRIAD-18,HV-3)
 saveRDS(srt.obj.list, file = 'batch2/seurat_analysis/srt.obj.list_QCed_beforeSCT.rds')
 
 #####################################################################
@@ -128,7 +128,7 @@ pbmc = merge(x = srt.obj.list[[1]], y = c(srt.obj.list[[2]],
              project = "merged")
 nr == ncol(pbmc)# sanity check
 # assign control/trisomy8 groups
-pbmc@meta.data$group = ifelse(pbmc@meta.data$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+pbmc@meta.data$group = ifelse(pbmc@meta.data$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
 # sanity check
 head(pbmc@meta.data)
 VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", 'percent.mt'), ncol = 3, pt.size = 0)

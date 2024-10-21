@@ -67,8 +67,8 @@ cluster_freq = function(pbmc,orig.ident,cluster){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters
@@ -232,9 +232,9 @@ tsct.summary2$trisomy[is.na(tsct.summary2$trisomy)] = 'NA in Trisomy annotation'
 # write.csv(tsct.summary2, 'tsct.summary2.csv')
 sum(tsct.summary2$count) # 83107
 sum(tsct.summary2$count[tsct.summary2$trisomy != 'NA in Trisomy annotation']) # 55693; match to the value above
-sum(tsct.summary2$count[tsct.summary2$orig.ident == 'GPG']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='GPG',]) # matched
+sum(tsct.summary2$count[tsct.summary2$orig.ident == 'TRIAD-1']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='TRIAD-1',]) # matched
 tsct.summary3 <- pivot_wider(select(tsct.summary2, - relative_frequenc), names_from = trisomy, values_from = count, values_fill = 0) %>%
-  subset(!(orig.ident %in% c('FYJ', 'SRN', 'VR')))
+  subset(!(orig.ident %in% c('HV-1', 'HV-2', 'HV-3')))
 ```
 
 ```{r freq cl}
@@ -246,7 +246,7 @@ create_dt(tsct.summary3,caption = 'Trisomy vs Normal in each cell cluster per Pa
 Trisomy vs Normal; gray and unannotated cells included
 
 ```{r cn by cluster, fig.width=15}
-ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = curated_clusters4, y = `count`,fill = trisomy)) +
+ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('HV-1','HV-2','HV-3')),], mapping = aes(x = curated_clusters4, y = `count`,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black') +
   theme_classic() +
@@ -269,7 +269,7 @@ ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR'))
 Trisomy vs Normal; gray and unannotated cells included
 
 ```{r freq by cluster, fig.width=15}
-ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = curated_clusters4, y = `relative_frequenc`,fill = trisomy)) +
+ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('HV-1','HV-2','HV-3')),], mapping = aes(x = curated_clusters4, y = `relative_frequenc`,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black') +
   theme_classic() +
@@ -290,7 +290,7 @@ ggplot(data = tsct.summary2[!(tsct.summary2$orig.ident %in% c('FYJ','SRN','VR'))
 Trisomy vs Normal; gray and unannotated cells excluded
 ```{r freq by cluster2, fig.width=15}
 ggplot(data = tsct.summary2 %>%
-         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(!(orig.ident %in% c('HV-1','HV-2','HV-3'))) %>%
          subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = curated_clusters4, y = `count`,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black',position = 'fill') +
@@ -313,7 +313,7 @@ Trisomy vs Normal; gray and unannotated cells excluded; grouped by cell clusters
 
 ```{r freq by cluster3, fig.width=15}
 ggplot(data = tsct.summary2 %>%
-         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(!(orig.ident %in% c('HV-1','HV-2','HV-3'))) %>%
          subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
   facet_grid(.~curated_clusters4) +
   geom_bar(stat="identity",color = 'black',position = 'fill') +
@@ -412,10 +412,10 @@ tsct.mld.summary2$trisomy[is.na(tsct.mld.summary2$trisomy)] = 'NA in Trisomy ann
 # write.csv(tsct.mld.summary2, 'tsct.mld.summary2.csv')
 sum(tsct.mld.summary2$count) # 83107
 sum(tsct.mld.summary2$count[tsct.mld.summary2$trisomy != 'NA in Trisomy annotation']) # 55693; match to the value above
-sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'GPG']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='GPG',]) # matched
-sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'GPG' & !(is.na(tsct.mld.summary2$myeloid_Clusters))]) == nrow(pbmc.mld2@meta.data[pbmc.mld2@meta.data$orig.ident=='GPG',]) # matched
+sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'TRIAD-1']) == nrow(pbmc@meta.data[pbmc@meta.data$orig.ident=='TRIAD-1',]) # matched
+sum(tsct.mld.summary2$count[tsct.mld.summary2$orig.ident == 'TRIAD-1' & !(is.na(tsct.mld.summary2$myeloid_Clusters))]) == nrow(pbmc.mld2@meta.data[pbmc.mld2@meta.data$orig.ident=='TRIAD-1',]) # matched
 tsct.mld.summary3 <- pivot_wider(select(tsct.mld.summary2, - relative_frequenc), names_from = trisomy, values_from = count, values_fill = 0) %>%
-  subset(!(orig.ident %in% c('FYJ', 'SRN', 'VR')))
+  subset(!(orig.ident %in% c('HV-1', 'HV-2', 'HV-3')))
 ```
 
 ```{r freq cl mld}
@@ -428,7 +428,7 @@ Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells includ
 ```{r frequency by cluster mld, fig.width=15}
 # filter out information with myeloid cell sub-clusters
 tsct.mld.summary2 = tsct.mld.summary2[complete.cases(tsct.mld.summary2$myeloid_Clusters),] 
-ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = myeloid_Clusters, y = `count`,fill = trisomy)) +
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('HV-1','HV-2','HV-3')),], mapping = aes(x = myeloid_Clusters, y = `count`,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black') +
   theme_classic() +
@@ -449,7 +449,7 @@ ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN
 Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells included; grouped by cell clusters
 
 ```{r frequency by cluster mld 2, fig.width=15}
-ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('HV-1','HV-2','HV-3')),], mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
   facet_grid(.~myeloid_Clusters) +
   geom_bar(stat="identity",color = 'black') +
   theme_classic() +
@@ -472,7 +472,7 @@ ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN
 Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells included
 
 ```{r frequency by cluster mld 3, fig.width=15}
-ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('FYJ','SRN','VR')),], mapping = aes(x = myeloid_Clusters, y = `relative_frequenc`,fill = trisomy)) +
+ggplot(data = tsct.mld.summary2[!(tsct.mld.summary2$orig.ident %in% c('HV-1','HV-2','HV-3')),], mapping = aes(x = myeloid_Clusters, y = `relative_frequenc`,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black') +
   theme_classic() +
@@ -494,7 +494,7 @@ Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells exclud
 
 ```{r frequency by cluster mld2 4, fig.width=15}
 ggplot(data = tsct.mld.summary2 %>%
-         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(!(orig.ident %in% c('HV-1','HV-2','HV-3'))) %>%
          subset(trisomy %in% c('NORMAL','TRISOMY')), mapping = aes(x = myeloid_Clusters, y = count,fill = trisomy)) +
   facet_grid(.~orig.ident) +
   geom_bar(stat="identity",color = 'black',position = 'fill') +
@@ -517,7 +517,7 @@ Trisomy vs Normal in Myeloid Cell Subclusters; gray and unannotated cells exclud
 
 ```{r frequency by cluster mld 5, fig.width=15}
 ggplot(data = tsct.mld.summary2 %>%
-         subset(!(orig.ident %in% c('FYJ','SRN','VR'))) %>%
+         subset(!(orig.ident %in% c('HV-1','HV-2','HV-3'))) %>%
          subset(trisomy %in% c('NORMAL','TRISOMY')),, mapping = aes(x = orig.ident, y = `count`,fill = trisomy)) +
   facet_grid(.~myeloid_Clusters) +
   geom_bar(stat="identity",color = 'black',position = 'fill') +

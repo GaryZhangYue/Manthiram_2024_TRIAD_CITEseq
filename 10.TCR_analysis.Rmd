@@ -79,13 +79,13 @@ cluster_freq = function(pbmc,orig.ident,cluster,sex=F){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
   if(sex == T){
     freq$sex = cov$sex[match(freq$orig.ident,cov$sample)]
     freq$group_sex = paste0(freq$group,'_',freq$sex)
     freq$group_sex = factor(freq$group_sex, levels = c('control_F','trisomy8_F','control_M','trisomy8_M'))
   }
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters
@@ -322,7 +322,7 @@ file_path = '/data/NCBR/projects/NCBR-323/multi-3rd-pass_finalMultiUsingHTODemux
 
 contig_list = list()
 
-for (i in c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP')){
+for (i in c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4')){
   contig_list[[i]] = read.csv(paste0(file_path,i,'.csv'))
 }
 
@@ -332,9 +332,9 @@ saveRDS(contig_list,'contig_list.T.session28_2.screpertoire.rds')
 ```
 
 ```{r combine contig list}
-group = ifelse(c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP') %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+group = ifelse(c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4') %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
 combined <- combineTCR(contig_list, 
-                        samples = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'), 
+                        samples = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'), 
                         cells ="T-AB")
 combined <- addVariable(combined, 
                       name = "group", 
@@ -412,7 +412,7 @@ exp8tm.t8.freq.sample <- pbmc.TCR.combined@meta.data %>%
 
 # add missing rows (if count is zero, that row is missing)
 exp8tm.t8.freq.sample.missing = NULL
-for (sample in c('GPG','HMM','JG', 'MMA', 'VKM','NYP')){
+for (sample in c('TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4')){
   for (exp in c(expanded_label,unexpanded_label)){
     for (triso in c('TRISOMY','NORMAL')){
       if (nrow(subset(exp8tm.t8.freq.sample,orig.ident == sample & trisomy == triso & cloneType == exp)) == 1){

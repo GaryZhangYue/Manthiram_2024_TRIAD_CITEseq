@@ -76,8 +76,8 @@ cluster_freq = function(pbmc,orig.ident,cluster){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters
@@ -141,7 +141,7 @@ pbmc.copy1 <- pbmc
 ```{r myeloid subset}
 DimPlot(pbmc, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
 pbmc.mld = subset(pbmc,curated_clusters3 %in% c('cDC','pDC','CD16 Mono', 'CD14 Mono'))
-pbmc.mld@meta.data$orig.ident = factor(pbmc.mld@meta.data$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+pbmc.mld@meta.data$orig.ident = factor(pbmc.mld@meta.data$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
 DimPlot(pbmc.mld, reduction = 'wnn.umap', group.by = "curated_clusters3", label = TRUE, label.size = 5, repel = T) + NoLegend()
 
 pbmc.mld.copy <- pbmc.mld
@@ -249,8 +249,8 @@ plot.umap.varyingRes2
 
 The Dimplot shows: 
 1. The controls (first line in the split dimplot) are relatively more similar to each other in comparison with the patient group
-2. On the group-level comparison, patients have more cells in cluster 1, especially in HMM, JG and NYP.
-3. GPG has an distinctly dense cluster 2, JG has substantially more cells in clusetrs 1 and 4, MMA has a distinctly dense cluster 3
+2. On the group-level comparison, patients have more cells in cluster 1, especially in TRIAD-3, TRIAD-7 and TRIAD-4.
+3. TRIAD-1 has an distinctly dense cluster 2, TRIAD-7 has substantially more cells in clusetrs 1 and 4, TRIAD-2 has a distinctly dense cluster 3
 
 ```{r curate clusters,fig.width=16, fig.height = 12}
 Idents(pbmc.mld2) <- "wsnn.myeloid_res.0.2" 

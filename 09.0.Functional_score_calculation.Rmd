@@ -90,13 +90,13 @@ cluster_freq = function(pbmc,orig.ident,cluster,sex=F){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
   if(sex == T){
     freq$sex = cov$sex[match(freq$orig.ident,cov$sample)]
     freq$group_sex = paste0(freq$group,'_',freq$sex)
     freq$group_sex = factor(freq$group_sex, levels = c('control_F','trisomy8_F','control_M','trisomy8_M'))
   }
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters

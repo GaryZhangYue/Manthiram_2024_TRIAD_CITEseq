@@ -73,8 +73,8 @@ cluster_freq = function(pbmc,orig.ident,cluster){
     group_by(!!sym(orig.ident), !!sym(cluster)) %>%
     summarise(count=n()) %>%
     mutate(relative_frequency = count/sum(count))
-  freq$group = ifelse(freq$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-  freq$orig.ident = factor(freq$orig.ident, levels = c('FYJ', 'SRN', 'VR','GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+  freq$group = ifelse(freq$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+  freq$orig.ident = factor(freq$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3','TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
   return(freq)
 }
 # custom function to plot DE genes between Trisomy and Normal by clusters
@@ -440,9 +440,9 @@ cluster_frequency.curated_clusters2 <- pbmc@meta.data %>%
   summarise(count=n()) %>%
   mutate(relative_frequency = count/sum(count))
 
-cluster_frequency.curated_clusters2$group = ifelse(cluster_frequency.curated_clusters2$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-cluster_frequency.curated_clusters2$orig.ident = factor(cluster_frequency.curated_clusters2$orig.ident, levels = c('FYJ', 'SRN', 'VR',
-                                                                                                                   'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+cluster_frequency.curated_clusters2$group = ifelse(cluster_frequency.curated_clusters2$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+cluster_frequency.curated_clusters2$orig.ident = factor(cluster_frequency.curated_clusters2$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3',
+                                                                                                                   'TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
 ggplot(data = cluster_frequency.curated_clusters2, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = curated_clusters2)) +
   geom_bar(position = 'fill', stat="identity",color = 'black') +
   theme_classic() +
@@ -467,9 +467,9 @@ cluster_frequency.curated_clusters <- pbmc@meta.data %>%
   summarise(count=n()) %>%
   mutate(relative_frequency = count/sum(count))
 
-cluster_frequency.curated_clusters$group = ifelse(cluster_frequency.curated_clusters$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-cluster_frequency.curated_clusters$orig.ident = factor(cluster_frequency.curated_clusters$orig.ident, levels = c('FYJ', 'SRN', 'VR',
-                                                                                                                 'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+cluster_frequency.curated_clusters$group = ifelse(cluster_frequency.curated_clusters$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+cluster_frequency.curated_clusters$orig.ident = factor(cluster_frequency.curated_clusters$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3',
+                                                                                                                 'TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
 ggplot(data = cluster_frequency.curated_clusters, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = curated_clusters)) +
   geom_bar(position = 'fill', stat="identity",color = 'black') +
   theme_classic() +
@@ -494,9 +494,9 @@ cluster_frequency.predicted.celltype.l1 <- pbmc@meta.data %>%
   mutate(relative_frequency = count/sum(count))
 cluster_frequency.predicted.celltype.l1$predicted.celltype.l1.update = cluster_frequency.predicted.celltype.l1$predicted.celltype.l1
 cluster_frequency.predicted.celltype.l1$predicted.celltype.l1.update[cluster_frequency.predicted.celltype.l1$predicted.celltype.l1 %in% c('CD4 T', 'CD8 T', 'other T')] = 'T'
-cluster_frequency.predicted.celltype.l1$group = ifelse(cluster_frequency.predicted.celltype.l1$orig.ident %in% c('FYJ', 'SRN', 'VR'), 'control', 'trisomy8')
-cluster_frequency.predicted.celltype.l1$orig.ident = factor(cluster_frequency.predicted.celltype.l1$orig.ident, levels = c('FYJ', 'SRN', 'VR',
-                                                                                                                           'GPG','HMM','JG', 'MMA', 'VKM','NYP'))
+cluster_frequency.predicted.celltype.l1$group = ifelse(cluster_frequency.predicted.celltype.l1$orig.ident %in% c('HV-1', 'HV-2', 'HV-3'), 'control', 'trisomy8')
+cluster_frequency.predicted.celltype.l1$orig.ident = factor(cluster_frequency.predicted.celltype.l1$orig.ident, levels = c('HV-1', 'HV-2', 'HV-3',
+                                                                                                                           'TRIAD-1','TRIAD-3','TRIAD-7', 'TRIAD-2', 'TRIAD-18','TRIAD-4'))
 ggplot(data = cluster_frequency.predicted.celltype.l1, mapping = aes(x = orig.ident, y = `relative_frequency`,fill = predicted.celltype.l1.update)) +
   geom_bar(position = 'fill', stat="identity",color = 'black') +
   theme_classic() +
