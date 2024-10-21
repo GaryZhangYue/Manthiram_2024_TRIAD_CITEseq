@@ -425,7 +425,7 @@ pathways <- c(
   "GOBP_INTRINSIC_APOPTOTIC_SIGNALING_PATHWAY",
   "REACTOME_TRANSLATION", "REACTOME_EUKARYOTIC_TRANSLATION_INITIATION", "REACTOME_EUKARYOTIC_TRANSLATION_ELONGATION",
   "REACTOME_ADAPTIVE_IMMUNE_SYSTEM", "GOBP_ADAPTIVE_IMMUNE_RESPONSE", "GOBP_T_CELL_MEDIATED_IMMUNITY",
-  "GOBP_REGULATION_OF_LEUKOCYTE_PROLIFERATION", "HALLMARK_MYC_TARGETS_V1"
+  "GOBP_REGULATION_OF_LEUKOCYTE_PROLIFERATION", "GOBP_LEUKOCYTE_MEDIATED_CYTOTOXICITY"
 )
 
 # Create the data frame
@@ -457,21 +457,21 @@ cluster_order = c("CD14 Mono",
 ```
 
 ```{r gsea plot,fig.width=10,fig.height = 12}
-# remove NAIT, NK and gdT from the gsea results 
+# remove NAIT, NK and gdT from the gsea results
 DE.GSEA.s = subset(DE.GSEA.s,celltype %in% cluster_order)
 
-# 
+#
 # DE.GSEA.s$comparison_celltype = paste(DE.GSEA.s$comparison,DE.GSEA.s$celltype,sep = ': ')
-# 
+#
 # # generate all combination of comparison and celltypes
 # combinations <- expand.grid(unique(DE.GSEA.s$comparison)[c(3,2,1)], cluster_order)
 # comparison_celltype_order <- paste(combinations$Var1, combinations$Var2, sep = ": ")
 # comparison_celltype_order = comparison_celltype_order[comparison_celltype_order %in% DE.GSEA.s$comparison_celltype]
 # # sanity check
 # length(intersect(unique(DE.GSEA.s$comparison_celltype),comparison_celltype_order)) == length(unique(DE.GSEA.s$comparison_celltype))
-# 
-# 
-# 
+#
+#
+#
 # DE.GSEA.s$comparison_celltype = factor(DE.GSEA.s$comparison_celltype,
 #                                        comparison_celltype_order)
 
@@ -510,25 +510,25 @@ DE.GSEA.s.s$pathway = gsub("interferon", "Interferon", DE.GSEA.s.s$pathway)
 DE.GSEA.s.s$pathway = gsub("interleukin", "Interleukin", DE.GSEA.s.s$pathway)
 DE.GSEA.s.s$pathway = gsub("nfkb", "NFKB", DE.GSEA.s.s$pathway)
 DE.GSEA.s.s$pathway = gsub("il6 jak stat3", "IL6 JAK STAT3", DE.GSEA.s.s$pathway)
-DE.GSEA.s.s$pathway = gsub("myc", "MYC", DE.GSEA.s.s$pathway)
+DE.GSEA.s.s$pathway = gsub("t cell", "T cell", DE.GSEA.s.s$pathway)
 DE.GSEA.s.s$pathway = gsub("tnfa", "TNFA", DE.GSEA.s.s$pathway)
 
-# 
-# ggplot(DE.GSEA.s.s, aes(x= comparison_celltype, y=pathway, size=neglogq, color=NES)) + 
-#   geom_point(alpha = 0.8) + 
+#
+# ggplot(DE.GSEA.s.s, aes(x= comparison_celltype, y=pathway, size=neglogq, color=NES)) +
+#   geom_point(alpha = 0.8) +
 #   theme_classic()+
 #   theme(axis.text.x = element_text(angle = 90, hjust = 1))+
-#   scale_color_gradient2(low = "#5CA9E9",  mid = '#CBD3C1',high = "red2", space = "Lab")+ 
+#   scale_color_gradient2(low = "#5CA9E9",  mid = '#CBD3C1',high = "red2", space = "Lab")+
 #   labs(color = "NES", size = "-log10(p adj.)",title = 'Selected GSEA results', subtitle = '(p adj. < 0.05)') +
 #   facet_wrap(~pathway_groups,scale = 'free_y',ncol = 1, strip.position = "right")+
 #    theme(panel.spacing.x = unit(0, "lines"), # Horizontal space
 #         panel.spacing.y = unit(0, "lines")) # Vertical space
 
-ggplot(DE.GSEA.s.s, aes(x= celltype, y=pathway, size=neglogq, color=NES)) + 
-  geom_point(alpha = 0.8) + 
+ggplot(DE.GSEA.s.s, aes(x= celltype, y=pathway, size=neglogq, color=NES)) +
+  geom_point(alpha = 0.8) +
   theme_classic()+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))+
-  scale_color_gradient2(low = "#5CA9E9",  mid = '#CBD3C1',high = "red2", space = "Lab")+ 
+  scale_color_gradient2(low = "#5CA9E9",  mid = '#CBD3C1',high = "red2", space = "Lab")+
   labs(color = "NES", size = "-log10(p adj.)",title = 'Selected GSEA results', subtitle = '(p adj. < 0.05)') +
   facet_grid(pathway_groups ~ comparison,
              scales = 'free')+
@@ -538,9 +538,10 @@ ggplot(DE.GSEA.s.s, aes(x= celltype, y=pathway, size=neglogq, color=NES)) +
         axis.text.x = element_text(face = "bold"),
         axis.text.y = element_text(face = "bold"),
         axis.title.x = element_text(face = "bold"),
-        axis.title.y = element_text(face = "bold")) 
-
+        axis.title.y = element_text(face = "bold"))
+ggsave('Fig.GSEA.pdf',device = 'pdf',width = 10,height=12)
 ```
+
 
 # Find selected chr 8 genes in the leading edge gene list of the plotted pathways
 
